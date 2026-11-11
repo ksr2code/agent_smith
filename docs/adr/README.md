@@ -2,6 +2,7 @@
 
 | Number | Title | Status |
 |---|---|---|
+| 0007 | Async MCP SDK on a dedicated thread with a synchronous bridge | Accepted |
 | 0010 | Keep code packages at the repository root (no nested student/ directory) | Accepted |
 
 0001–0009 and 0011–0012 are pre-aligned in
