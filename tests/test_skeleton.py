@@ -12,6 +12,32 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_PATH = REPO_ROOT / "sandbox_template.json"
 
+# The exact allowlist: the subject's 20 default entries plus the one
+# documented addition (_strptime, see ADR-0005 when it lands).
+EXPECTED_IMPORTS = {
+    "math",
+    "math.*",
+    "collections",
+    "collections.*",
+    "typing",
+    "typing.*",
+    "functools",
+    "operator",
+    "itertools",
+    "re",
+    "json",
+    "heapq",
+    "bisect",
+    "copy",
+    "string",
+    "random",
+    "datetime",
+    "datetime.*",
+    "array",
+    "cmath",
+    "_strptime",
+}
+
 
 def test_sandbox_package_imports() -> None:
     import sandbox
@@ -47,10 +73,16 @@ def test_sandbox_template_matches_subject_defaults() -> None:
         "max_execution_time_seconds",
         "max_memory_mb",
     }
-    # Subject defaults (20) + the single documented addition
-    # (_strptime, see ADR-0005 when it lands).
+    # Exact membership, not a count: any stray, missing or replaced
+    # entry must fail (a count passes for any 21 strings). No
+    # duplicates smuggled in alongside the full set.
     imports = data["authorized_imports"]
-    assert len(imports) == 21
+    assert set(imports) == EXPECTED_IMPORTS
+    assert len(imports) == len(set(imports))
     assert data["allowed_directories"] == ["/testbed", "/tmp/agent"]
+    # Ints, not floats: JSON 30.0 parses as float and 30.0 == 30 is
+    # True, but the Pydantic model later wants int fields.
+    assert isinstance(data["max_execution_time_seconds"], int)
+    assert isinstance(data["max_memory_mb"], int)
     assert data["max_execution_time_seconds"] == 30
     assert data["max_memory_mb"] == 512
