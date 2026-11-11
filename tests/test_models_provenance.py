@@ -31,25 +31,42 @@ def test_models_is_verbatim_grader_contract() -> None:
 
 
 def test_models_contract_anchors() -> None:
-    """The field names our solution IO and the grader share."""
+    """The exact field names our solution IO and the grader share.
+
+    The sets below are EXHAUSTIVE (taken from models.py's
+    model_fields, which is byte-pinned to the grader's file by the
+    provenance test): a rename or deletion of any contract field —
+    e.g. the totals the harnesses write — must fail here even on a
+    clone without moulinette/, where the provenance test skips.
+    """
     import models
 
-    # Solution/step metrics anchors (subset — the contract has more).
-    assert set(models.SolutionOutput.model_fields) >= {
+    assert set(models.SolutionOutput.model_fields) == {
         "task_id",
         "benchmark",
         "success",
         "solution",
         "iterations",
         "total_requests",
+        "total_input_tokens",
+        "total_output_tokens",
+        "total_time_seconds",
         "steps",
         "system_prompt",
         "error",
+        "timestamp",
     }
-    assert set(models.StepMetrics.model_fields) >= {
+    assert set(models.StepMetrics.model_fields) == {
         "step",
         "input_tokens",
         "output_tokens",
+        "request_time_ms",
+        "timestamp",
+        "api_url",
+        "model_name",
+        "llm_output",
+        "sandbox_input",
+        "sandbox_output",
         "retries",
     }
     # SandboxConfig has exactly these four fields in the contract.
