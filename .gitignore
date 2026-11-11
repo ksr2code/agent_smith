@@ -18,3 +18,7 @@ build/
 
 # macOS
 .DS_Store
+
+# project working dirs (benchmark run cache, evaluation artifacts)
+cache/
+evaluations/

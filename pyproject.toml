@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-smith"
+version = "0.1.0"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "pydantic>=2",
+]
+
+[project.scripts]
+# Forward declaration: sandbox/cli.py lands in T09. The entry point
+# does not break `uv sync`; it only resolves once the module exists.
+sandbox = "sandbox.cli:main"
+
+[tool.hatch.build.targets.wheel]
+# py-modules (models.py, solution_io.py) are added here when those
+# files land (T03).
+packages = ["sandbox", "agent", "llm", "mcp_client"]
+
+[tool.ruff]
+line-length = 79
+# The example moulinette is grader reference material (gitignored,
+# documented provenance) — never our linting surface.
+extend-exclude = ["moulinette"]
+
+[tool.mypy]
+disallow_untyped_defs = true
+files = ["sandbox", "agent", "llm", "mcp_client"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "flake8>=7.1",
+]

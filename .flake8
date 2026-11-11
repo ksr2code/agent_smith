@@ -1,0 +1,17 @@
+[flake8]
+max-line-length = 79
+# E203: whitespace before ':' — Black-style formatter compatibility.
+extend-ignore = E203
+# Only documented-provenance / non-project directories:
+#   moulinette  — grader reference material (gitignored)
+#   .venv       — virtualenv
+#   cache       — benchmark run cache (project working dir)
+#   evaluations — evaluation artifacts (project working dir)
+#   build, dist — build outputs
+exclude =
+    moulinette,
+    .venv,
+    cache,
+    evaluations,
+    build,
+    dist
