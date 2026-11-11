@@ -16,10 +16,10 @@ dependencies = [
 sandbox = "sandbox.cli:main"
 
 [tool.hatch.build.targets.wheel]
-# models.py (T02, verbatim grader contract) is installed via
-# py-modules; solution_io.py joins when it lands (T03).
+# models.py (T02, verbatim grader contract) and solution_io.py (T03)
+# are installed via py-modules; both land at the repo root (ADR-0010).
 packages = ["sandbox", "agent", "llm", "mcp_client"]
-py-modules = ["models"]
+py-modules = ["models", "solution_io"]
 
 [tool.ruff]
 line-length = 79
@@ -31,7 +31,10 @@ extend-exclude = ["moulinette", "models.py"]
 
 [tool.mypy]
 disallow_untyped_defs = true
-files = ["sandbox", "agent", "llm", "mcp_client"]
+# solution_io.py is OUR typed code and must be type-checked;
+# models.py stays out (provenance verbatim copy, excluded from our
+# style surface like the moulinette itself).
+files = ["sandbox", "agent", "llm", "mcp_client", "solution_io.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
