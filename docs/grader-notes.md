@@ -2,7 +2,8 @@
 
 Study date 2026-11-11. Machine: macOS, uv 0.13.1, Docker 29.8.2,
 CPython 3.10.19 (uv-managed). Moulinette venv resolved: pydantic
-2.14.3, multiprocess 0.70.18, swebench 4.1.0, colorama 0.4.x. Every
+2.12.5, multiprocess 0.70.18, swebench 4.1.0, colorama 0.4.x (the
+project venv carries pydantic 2.14.3; do not conflate them). Every
 claim below is OBSERVED by running the commands, except sentences
 marked "(from source)". The example moulinette is gitignored
 reference material; nothing in it was edited — the two environment
@@ -146,8 +147,14 @@ Limit violations — one per dummy, steps consistent with totals
     - Output tokens 1600 exceeds limit 1500
     - Time 130.0s exceeds limit 120.0s
 
-`display` always exits 0 (it is for the corrector). Consistency
-warnings observed verbatim:
+These lines print with a two-space dash prefix (`  - <text>`) and the
+WARN/NOTE lines with a two-space prefix (`  WARN: <text>`),
+color-wrapped on a TTY — match on the text, never assume exact
+leading whitespace. The `Multiple model_names` set repr has
+non-deterministic ordering; match on the prefix, not the full line.
+
+`display` exits 0 for a valid solution file (missing file or invalid
+JSON raises → non-zero). Consistency warnings observed verbatim:
 
     NOTE: Step 2: 1 LLM retries
     WARN: system_prompt is empty
@@ -196,9 +203,10 @@ on this machine (MBPP correctness container + sandbox-tests-linux).
 
 1. (1 min) `cd moulinette && uv sync`; confirm the CLI starts:
    `uv run python -c "from moulinette.__main__ import main"`. If the
-   ResourceTracker AttributeError appears, reuse the workaround
-   pattern from `cache/moulinette_cli.py` (do not edit the
-   moulinette).
+   ResourceTracker AttributeError appears, define a no-op `__del__`
+   on ResourceTracker before importing (the pattern documented in
+   quirk 2 above). This runbook assumes the same working directory —
+   with `moulinette/` present — is carried to the exam machine.
 2. (2 min) Dump one MBPP and one SWE-bench task (specific IDs).
    Diff each file's keys against `MBPPTaskInput` /
    `SWEBenchTaskInput` in models.py. Re-check the hidden-test split
