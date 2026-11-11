@@ -16,15 +16,18 @@ dependencies = [
 sandbox = "sandbox.cli:main"
 
 [tool.hatch.build.targets.wheel]
-# py-modules (models.py, solution_io.py) are added here when those
-# files land (T03).
+# models.py (T02, verbatim grader contract) is installed via
+# py-modules; solution_io.py joins when it lands (T03).
 packages = ["sandbox", "agent", "llm", "mcp_client"]
+py-modules = ["models"]
 
 [tool.ruff]
 line-length = 79
 # The example moulinette is grader reference material (gitignored,
 # documented provenance) — never our linting surface.
-extend-exclude = ["moulinette"]
+# models.py is a verbatim copy of the grader's contract file — its
+# formatting is the grader's, not ours; exclude it from style.
+extend-exclude = ["moulinette", "models.py"]
 
 [tool.mypy]
 disallow_untyped_defs = true

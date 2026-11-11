@@ -4,12 +4,15 @@ max-line-length = 79
 extend-ignore = E203
 # Only documented-provenance / non-project directories:
 #   moulinette  — grader reference material (gitignored)
+#   models.py   — verbatim copy of the grader's contract file; its
+#                 formatting is the grader's, not ours
 #   .venv       — virtualenv
 #   cache       — benchmark run cache (project working dir)
 #   evaluations — evaluation artifacts (project working dir)
 #   build, dist — build outputs
 exclude =
     moulinette,
+    models.py,
     .venv,
     cache,
     evaluations,
