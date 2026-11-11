@@ -2,6 +2,8 @@
 
 | Number | Title | Status |
 |---|---|---|
+| 0001 | Restricted worker subprocess as the sandbox isolation unit | Accepted |
+| 0002 | MCP client in the parent, tool stubs in the worker | Accepted |
 | 0007 | Async MCP SDK on a dedicated thread with a synchronous bridge | Accepted |
 | 0010 | Keep code packages at the repository root (no nested student/ directory) | Accepted |
 
