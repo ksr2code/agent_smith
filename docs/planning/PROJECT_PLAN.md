@@ -4,7 +4,8 @@
 > daily routine in docs/planning/TEAM_WORKFLOW.md.
 
 Team: 2 people. Tracking: GitHub Issues per milestone gate. Linting
-and type checking run by hand (no hooks, per the subject). This plan
+and type checking run by hand (no hooks — a team choice; the subject
+only requires readable, structured, documented code). This plan
 is the starting point; adjust it as you learn — and record *why* in
 ADRs when a decision changes.
 
@@ -49,8 +50,11 @@ the benchmark report, code quality, and a live defense.
 
 ## 2. Key decisions (the ADR program)
 
-These are pre-aligned proposals so ADR writing is ratification, not
-debate from zero. Each becomes an ADR (numbering fixed) in the phase
+These are pre-aligned strong defaults so the team starts from a
+working position, not from zero — but every ADR remains **fully
+contestable**: the PR discussion is real, challenging the assumptions
+is expected, and rejecting a pre-alignment is a legitimate outcome.
+Each becomes an ADR (numbering fixed) in the phase
 noted in docs/planning/IMPLEMENTATION_PLAN.md.
 
 | # | Topic | Decision | Core rationale |
@@ -98,7 +102,7 @@ L ≈ two days):
 | T19 | MBPP CLI — `validate mbpp` PASSED | S | A | T18 |
 | T20 | MBPP harness + tuning to ≥80% | L | A | T19 |
 | T21 | SWE-bench layout (ADR-0003) | S | A | T12 |
-| T22 | Docker lifecycle + cleanup (ADR-0008) | M | B | T02 |
+| T22 | Docker lifecycle + cleanup (ADR-0008) | M | B | T02 † |
 | T23 | SWE-bench tools, Docker mode | L | B | T10, T22 |
 | T24 | SWE-bench CLI + real-run hard gate | M | A | T18, T23 |
 | T25 | SWE-bench harness + tuning to ≥4/6 | L | A+B | T24 |
@@ -113,6 +117,9 @@ L ≈ two days):
 Parallel waves after T04: B runs T06→T07→T08→T09 while A runs
 T10/T11/T15/T16, then T12→T13→T14→T17; B may pull T22 forward
 right after T08 (Wave 2b) so Docker work overlaps A's client tasks.
+† T02 is the only **hard** dependency of T22 (the grader study); the
+"after T08" placement is pure scheduling for parallelism, not a
+prerequisite.
 
 ## 4. Working with ADRs
 
@@ -150,6 +157,7 @@ Template:
 | Prompt overfits to tuned instances | Tune on train/pool; hold-out instances in T25/T29; tune the loop, not per-task |
 | Exam moulinette differs from the example | Build to the subject; limits configurable; exam-day runbook rehearsed (T02/T32) |
 | Wall-clock overruns (kills, not checks) | 90% token margins; time reserve; submit-before-deadline prompt rules |
+| Docker image pull inside the 900 s kill clock | Check the image exists locally before pulling; cap the pull (~600 s) and abort gracefully with an honest solution.json; the exam-day runbook verifies whether exam-machine images are pre-cached |
 | Review bottleneck with 2 people | Ownership map + cross-review; small PRs; gates, not per-task ceremonies |
 | AI-assisted code nobody understands | Cross-half walkthroughs; nothing commits that either member cannot explain; every member reads what they merge |
 

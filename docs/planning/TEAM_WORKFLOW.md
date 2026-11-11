@@ -20,8 +20,9 @@ from top to bottom; then use §3 as the daily routine.
 - Design decisions are ADRs in `docs/adr/`, accepted after PR
   discussion.
 - Linting and type checking run by hand (ruff at 79 columns,
-  flake8-conformant, mypy) — no hooks, per the subject; the config is
-  correct from day one so "clean" is the default.
+  flake8-conformant, mypy) — no hooks (a team choice; the subject
+  requires readable, structured, documented code, nothing more); the
+  config is correct from day one so "clean" is the default.
 - The provided moulinette is an example; the exam one may differ. We
   build to the subject and verify with the exam-day runbook before
   any graded run.
@@ -68,7 +69,10 @@ Rules:
 3. Work in small steps. Where the plan gives TDD steps, write the
    failing test first and watch it fail. Commit after every green
    cycle (`type: description` — `feat`, `fix`, `test`, `docs`,
-   `refactor`, `chore`). Never leave the tree red overnight.
+   `refactor`, `chore`). Never leave the tree red overnight; **the
+   one sanctioned exception** is T06's red security battery, which
+   lives on its feature branch (never on `main`) until T07 turns it
+   green.
 4. Before pushing: `make test` (plus `make sandbox-tests` for
    sandbox-adjacent work). Run `ruff format <file>` on what you
    wrote.
@@ -105,13 +109,18 @@ misses `..`"), not vague ones.
   (test output, validation verdicts, devlog rows, artifact paths);
   the architect verifies against the plan's gate table and accepts or
   bounces it. Evidence is checked against the repo (diffs, artifacts,
-  command output), not against the summary.
+  command output), not against the summary. **Countersign rule:**
+  a gate covering the architect's own implementation work (M2–M4
+  contain it) is co-accepted by the systems owner — the
+  author-never-reviews rule applies to gate acceptance too.
 - After each gate: `make lint && make types` on the milestone's diff;
   a 20-minute retro (what slowed us down → one line in
   `docs/log.md`).
-- Every few tasks, each member explains a module from the **other**
-  half out loud. If it is unclear, review it together — this is
-  defense training, not ceremony.
+- **At every gate exit: one cross-half walkthrough** (alternate who
+  explains) — the explainer presents a module from the *other*
+  half, unaided. If it is unclear, review it together. This is
+  defense training on a schedule, not an optional ritual: both
+  members must be able to explain and modify any module live.
 - **Freeze rule** (after the quality pass, before benchmarks): source
   changes need architect sign-off and restart affected benchmark
   data. The benchmark report must describe the exact code the repo
@@ -123,8 +132,8 @@ Before every push: `make test` (+ `make sandbox-tests` for
 sandbox-adjacent work). At milestone ends: `make lint`, `make types`.
 Sandbox/memory/kill results are authoritative only from
 `make sandbox-tests-linux` (macOS does not enforce `RLIMIT_AS`) plus
-one bare-VM pass before delivery. Benchmarks never run in CI and
-never on unfrozen code.
+one bare-VM pass before delivery. Benchmarks are never run
+automatically (this project has no CI) and never on unfrozen code.
 
 ## 7. ADRs
 
@@ -204,8 +213,9 @@ Breaking any of these can fail the project:
 - **Sandbox / worker:** the restricted subprocess executing the
   LLM's Python.
 - **MCP:** Model Context Protocol — the connection between the agent
-  and its tools; our servers expose the nine SWE-bench tools and
-  `run_tests`.
+  and its tools; our servers expose the nine SWE-bench tools (one of
+  which is SWE-bench's own `run_tests`) plus the MBPP server's
+  separate `run_tests`.
 - **MBPP / SWE-bench:** the two graded benchmarks.
 - **ADR:** architecture decision record. **Gate:** milestone
   acceptance with evidence. **Freeze:** no source changes without

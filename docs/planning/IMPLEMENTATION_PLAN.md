@@ -73,7 +73,9 @@ Working rules:
   logins**; `BENCHMARK_REPORT.md` at root backed by `solution.json`
   files.
 - Style: ruff at 79 columns + flake8-conformant + mypy, configured
-  from day one, run by hand (no hooks, per the subject).
+  from day one, run by hand (no hooks — a team choice; the subject
+  requires readable, structured, documented code, and names ruff only
+  as an example container tool).
 
 ## Design principles (binding for every task)
 
@@ -134,6 +136,11 @@ repo/
 | M4 | T21–T25 | one pool task `validate swebench` PASSED **before** tuning; final-prompt pool ≥4/6; re-draw reproducible; ≥4 hold-outs recorded; metrics on 3 traces |
 | M5 | T26–T32 | red-team closed; lint/types/test clean; Linux + bare-VM passes; **freeze declared**; matrix ≥5×≥2×3 + ablation; report; README; runbook ≤10 min; live-mod drill; `v1.0` |
 
+At kickoff: give every gate a **target date** and set a **cut-line
+date** — the day "Where to cut if behind" starts applying. The
+critical path is T18 → T20 → T24 → T25 → T28 → T29, all on the
+architect; date it first.
+
 ---
 
 # Phase 0 — Foundations [A leads, both pair] — T01–T05
@@ -148,9 +155,11 @@ true` + file list), `.flake8` (max-line-length 79, `extend-ignore =
 E203` — Black-style formatter compatibility; excludes only for
 documented provenance files), `.gitignore` (`.env`, `cache/`,
 `evaluations/`), `.env.example` (names only), `Makefile`, empty
-packages, `sandbox_template.json` (subject defaults verbatim: the 19
-authorized-import entries incl. `math.*`, `collections.*`, `typing.*`,
-`datetime.*`; `/testbed`, `/tmp/agent`; 30 s; 512 MB).
+packages, `sandbox_template.json` (the subject's default allowlist —
+**20 entries**: four `root` + `root.*` pairs plus twelve single
+modules — with `/testbed`, `/tmp/agent`, 30 s, 512 MB; plus the
+`_strptime` runtime shim documented in T07, so the template is
+"subject defaults + one documented addition", never "verbatim").
 
 Makefile: `test`, `sandbox-tests`, `sandbox-tests-linux` (security
 suite inside `ghcr.io/astral-sh/uv:python3.10-bookworm`, repo mounted
@@ -180,7 +189,11 @@ format --check), `types`, `clean-containers`, and placeholders for
       sandbox_input); the exam-day runbook (10-minute checklist: dump
       one task per benchmark and diff JSON shape against models.py;
       dummy-validate and read enforced limits; confirm the invocation
-      cwd/command; re-check container cleanup).
+      cwd/command; re-check container cleanup; re-verify the literal
+      pass-marker string ("Overall: PASSED") against the real
+      moulinette; check whether exam-machine Docker images are
+      pre-cached — the agent's image pull runs inside its own 900 s
+      kill clock, see T24).
 - [ ] Commit. Both members run the commands once.
 
 ### T03 [ARCH]: Models + solution IO
@@ -442,7 +455,7 @@ resolved.parents` — symlinks and `..` confined). Signatures (exact):
 
 ```python
 read_file(filepath, start_line=1, end_line=None) -> str   # "<n>: <line>"
-edit_file(filepath, old_str, new_str) -> str              # count + ast.parse check
+edit_file(filepath, old_str, new_str) -> str              # count + syntax/lint check
 list_files(directory=".", pattern="*") -> str             # relative, .git filtered, ≤500
 search_code(pattern, file_pattern="*") -> str             # "/abs/path.py:<line> <content>"
 search_function_or_class_definition_in_code(name) -> str  # ast.walk, same format
@@ -458,8 +471,11 @@ Constants: `OUTPUT_CAP = 10_000`; `PATCH_CAP = 50_000`;
 pollute a patch. All output caps append `[truncated N chars]`.
 `edit_file`: exact-match replace (count==0 → error quoting `old_str`);
 replaces all occurrences and reports the count; then `ast.parse` →
-"syntax OK" or "SYNTAX ERROR introduced: … — fix it". Errors raise a
-`ToolError` (FastMCP marks isError).
+"syntax OK" or "SYNTAX ERROR introduced: … — fix it", followed by a
+lightweight AST lint (undefined names — a small stdlib-only walker,
+no external tool) reporting "LINT VIOLATION: …" for the subject's
+"an edit introduced a syntax error **or lint violation**" feedback
+case. Errors raise a `ToolError` (FastMCP marks isError).
 - [ ] Failing tests (tools as plain functions): exact formats; `get_patch`
       includes a NEW untracked file and excludes artifacts created by
       `run_command`; path escapes denied; two different TESTBED_PATH
@@ -612,7 +628,10 @@ The example must be **generic** (`src/config.py`-style paths, no real
 repo names) — pin with a test.
 - [ ] Tests: slots/example/final_answer/manual pointer present; MBPP
       variant under the size cap; generic-path test. Measure the real
-      token count; record. Commit.
+      token count of a full 3-step run (prompt + manual + two rounds
+      of history + observations); if headroom under the 6,000 input
+      budget leaves fewer than 2 further steps, shrink the prompt or
+      manual before proceeding. Record the numbers. Commit.
 
 ---
 
@@ -698,8 +717,11 @@ never duplicated; every row appended to `benchmarks/mbpp_devlog.md`,
 summary JSON; exit 1 on any failure.
 **Tuning:** tune on TRAIN split only; measure honestly on TEST split:
 ≥20 tasks × ≥2 seeds, ≥80% within limits; p95 wall ≤100 s; categorize
-every failure; iterate on prompt/stop/observation caps; commit each
-iteration.
+every failure; iterate on prompt/observation caps and **per-model stop
+sequences** (default `"\nObservation:"`; the subject suggests code-end
+stop tokens — if a model rambles past its block, add one, but pair any
+closing-fence stop with the unclosed-fence recovery so the extractor
+does not mislabel the reply malformed); commit each iteration.
 - [ ] Harness tests (sampler determinism, taxonomy incl. the
       logic-over-claim case, fail-closed validation, layer-error
       continuation). Devlog + honest tables. Commit.
@@ -764,7 +786,11 @@ mode. Local default unchanged.
 
 Same args as MBPP + `--docker/--no-docker`. Flow: type-guard; limits
 (30/300k/10k/900 defaults); eval script → host temp file; docker
-path: `startup_sweep()` → `pull_image` → `start_instance_container`
+path: `startup_sweep()` → **image check: if the image is not present
+locally, pull with a self-imposed cap (~600 s) — the pull runs inside
+the 900 s kill clock, so on a slow/cold pull ABORT GRACEFULLY: write
+an honest solution.json carrying the error (success=false) rather
+than dying mid-pull at the deadline** → `start_instance_container`
 → **`install_sigterm_handler([container])` immediately** →
 `copy_in(eval_tmp, "/eval.sh")` → child env `AGENT_CONTAINER`,
 `TESTBED_PATH=/testbed`, `EVAL_SCRIPT_PATH=/eval.sh`. The env reaches
@@ -828,7 +854,13 @@ every reachable path, runtime-built names, fresh combinations.
 **Expect to find things** — a battery passing is not proof; run
 iterated adversarial review rounds (each round: fresh eyes, mandate =
 concrete reproducible exploits, not speculation) until a round finds
-nothing new; fix at the policy/data level with an empirical fence
+nothing new. **Time-boxed, with a floor:** agree a generous box at
+kickoff (the rounds are historically where the real escapes surface —
+do not starve them); the box ends on a clean round OR at the deadline,
+whichever first, and anything found after it goes to a documented
+residual list rather than an endless hunt. Keep the positive-control
+tests authoritative against false positives. Fix at the policy/data
+level with an empirical fence
 (exploit fails, positive controls pass) for every finding. Allowlist
 audit: for every authorized entry, grep its CPython source for
 `import os/sys`, `subprocess`, `open(` and confirm the proxy covers
