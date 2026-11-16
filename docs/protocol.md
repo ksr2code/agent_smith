@@ -1,219 +1,239 @@
-# Sandbox worker protocol
+# Agent Smith — Worker Protocol & A/B Interface Contract
 
-Status: working draft (T04) — pending joint review alongside the
-A/B interface proposal.
+Status: **Proposed** (v1.1) — pending joint ratification via PR review.
+Lineage: reconciles two drafts — the T04 worker-protocol draft (this
+branch) and the A/B Working Agreement proposal (`docs/ab-interface-protocol`,
+commit `7a7f8a7`). Naming conventions, the typed shared contracts and
+the task-deadline model are adopted from the A/B proposal; wire
+semantics core (status derivation, stdout replacement, stale discard,
+tee streaming) comes from the T04 draft. Both drafts credited; the
+deltas are labeled inline.
 
-## 1. Transport and framing
+Consumers: A side (agent loop, MCP client, CLIs) and B side (sandbox
+worker/process, tool servers). This file is the single interface
+contract; changes after ratification require architect sign-off per
+docs/planning/TEAM_WORKFLOW.md §2.
 
-The worker is launched as [sys.executable, "-m", "sandbox.worker"] in
-its own process group (start_new_session=True); the parent talks to
-it over the worker's stdin/stdout with ONE JSON object per line
-(UTF-8, no pretty-printing, no embedded newlines — JSON escapes
-them). The worker's stderr is DEVNULL on the parent side: the
-protocol channel must stay pure (the worker's own diagnostics go to
-ITS stderr and are deliberately discarded by the parent).
+## 1. Shared typed contracts (neutral module)
 
-## 2. Messages
+Both halves import these from ONE neutral module (proposed:
+`contracts.py` at the repository root — `models.py` is the frozen
+grader contract and must not grow project types). Typed models and
+validated JSON boundaries, not unchecked dictionaries:
 
-### Parent → Worker
+```python
+ToolInfo(name: str, python_name: str, description: str,
+         input_schema: JsonObject, parameter_order: tuple[str, ...])
+ToolArguments(values: JsonObject)
+ToolReply(is_error: bool, text: str)
+ToolDispatcher.call(name: str, arguments: ToolArguments,
+                    *, deadline: float) -> ToolReply
+```
 
-- init: {"type": "init", "config": <SandboxConfig as dict>,
-  "tools": [{"name": str, "description": str, "params": [str, ...]}]}
-  — exactly one per worker process, first line after spawn. tools is
-  the ToolInfo list (params in server order, from list_tools); empty
-  when no server is connected (final_answer is always injected
-  separately — it is never an MCP tool).
+`JsonObject` = string keys, recursively JSON-safe values.
 
-  The `name` in `tools[]` is the RAW server name, exactly as the MCP
-  server reports it. The WORKER builds the namespace stubs from this
-  list, applying the naming rules (invalid identifier characters
-  `-`/`.` rewritten to `_`, leading digit prefixed `_`), and renames
-  a server tool literally named `final_answer` to `mcp_final_answer`
-  — the sandbox owns that name; the injected `final_answer` always
-  wins. `tool_call.name` on the wire ALWAYS carries the raw server
-  name, so the parent dispatches to the server unchanged and no
-  back-map exists.
+- `python_name` is **derived, never trusted from the wire**: the
+  neutral module provides `derive_python_name(name)` implementing the
+  identifier rules (`-`/`.`→`_`, leading digit → `_`, degenerate →
+  `tool_` prefix) and the collision rule (a tool literally named
+  `final_answer` becomes `mcp_final_answer` — the sandbox owns that
+  name). Both halves call the same function; see §4 for why the
+  worker recomputes it rather than receiving it.
+- Argument validation against `input_schema` happens at the
+  **dispatch boundary** (parent side), not in the worker.
+- `[TOOL ERROR]` is prefixed **exactly once** — by the parent when
+  formatting a failed `ToolReply`; worker stubs surface that text via
+  an exception; no layer adds a second prefix.
 
-- exec: {"type": "exec", "id": <int, monotonic from 1>, "code": str}
-- tool_result: {"type": "tool_result", "call": <int, matching the
-  tool_call>, "text": str} — text is the ALREADY-FORMATTED
-  observation (the parent applies format_tool_result, including any
-  "[TOOL ERROR]" prefix); the worker-side stub returns it verbatim to
-  user code. A failed tool call is a normal string return carrying
-  the error text — it never aborts the exec.
-- shutdown: {"type": "shutdown"} — after this the worker exits 0.
+## 2. Sandbox public API — B provides, A calls
 
-### Worker → Parent
+```python
+class SandboxProcess:
+    def __init__(self, cfg, tools, tool_dispatch): ...
+    def start(self) -> None            # returns once the worker is ready
+    def execute(self, code: str, *, task_deadline: float) -> ExecutionResult
+    def shutdown(self) -> None         # bounded; safe to repeat
 
-- ready: {"type": "ready"} — sent once per worker process, after
-  limits are set, the import gate installed, stubs built and the
-  restrictions in place. The parent waits for `ready` after every
-  (re)start before sending any exec; no exec is processed before
-  it.
-- stdout: {"type": "stdout", "id": <exec id>, "chunk": str} — user
-  code's print() output, streamed in chunks by the tee (§4).
-- tool_call: {"type": "tool_call", "call": <int, monotonic from 1
-  per worker process>, "id": <exec id>, "name": str, "args":
-  {str: Any}} — emitted by the stub when user code invokes an MCP
-  tool. If the stub cannot JSON-serialize an argument, that is a
-  LOCAL TypeError raised into user code (naming the argument) — no
-  tool_call message is sent; the exec continues under normal
-  exception semantics.
-- result: {"type": "result", "id": <exec id>, "status": <one of
-  "ok" | "error" | "final" | "keyboard_interrupt" |
-  "system_exit">, "stdout": <str: full accumulated user output for
-  this exec>, "error": <str | null: the standard Python traceback
-  text, as formatted by traceback.format_exception, when status is
-  "error">, "final_answer": <str | null>}
+@dataclass
+class ExecutionResult:
+    status: str        # ok | error | final | timeout | killed
+                       # | keyboard_interrupt | system_exit
+    stdout: str        # actual output; partial output on failure
+    error: str | None
+    final_answer: str | None
+```
 
-## 3. Statuses and their derivation
+Required behavior (both drafts agree unless noted):
 
-ok / error / final / keyboard_interrupt / system_exit travel on the
-wire; the PARENT derives two more, never sent by the worker:
+- Variables persist across entries after normal execution and
+  ordinary Python errors.
+- Timeout or worker death terminates and reaps the worker (process
+  group); the next entry runs on a fresh worker and the result
+  reports "variables were reset". External effects (tool edits,
+  container state) are NOT rolled back and interrupted code is never
+  automatically replayed.
+- `final_answer()` is a sandbox built-in, never an MCP tool. Its
+  value is captured via a slot that survives user-side
+  `except BaseException`. **First answer per entry wins** (A/B
+  proposal; adopted over the T04 last-write-wins — simpler
+  invariant). `final` is reported whenever it was called, even if
+  user code caught the signal.
+- `KeyboardInterrupt` / `SystemExit` propagate to the parent caller;
+  `SystemExit` re-raises with its exit code (wire carries it, §4).
+- Ordinary execution errors come back in `ExecutionResult`;
+  lifecycle/protocol failures (worker won't start, channel corrupt)
+  raise a typed `SandboxError` with partial output attached — A
+  handles them and writes an honest failed solution.
+- Output is capped (10 000 chars) with truncation disclosed inside
+  the cap.
 
-- timeout — the parent's deadline expired (§5) and the worker was
-  killed; result carries the partial accumulated stdout received so
-  far.
-- killed — the worker died without a result (crash, os._exit, OOM at
-  the OS level); partial stdout likewise.
+## 3. Deadline model
 
-The parent accumulates stdout events per exec ONLY to recover
-partial output after timeout/killed; on a normal `result` message
-the parent uses `result.stdout` and DISCARDS its own accumulation
-(the two would double-count).
+Single enforcement of the hard stop (A/B proposal; adopted):
 
-After a timeout or killed result the worker process is assumed DEAD
-(the parent never reuses it): a fresh worker is started (fresh exec
-ids continue the parent's own monotonic counter; variable state is
-lost — the loop's "variables were reset" feedback exists for this).
-Messages arriving with an exec id that is not the current one are
-STALE (e.g. queued output from a replaced worker): the parent drops
-them silently.
+- A passes `task_deadline` — an absolute `time.monotonic()` value,
+  already minus A's output/cleanup reserve. B treats it as the outer
+  bound: reject expired deadlines before executing; expiry mid-entry
+  returns `timeout` with a task-deadline diagnostic, and **A ends the
+  task** (no further iterations — unlike a sandbox timeout, which
+  permits another iteration).
+- Internally B still enforces the per-exec limit
+  (`cfg.max_execution_time_seconds` + 5 s grace): the guard is
+  suspended while a tool call is in flight and extended by the
+  call's measured duration — tool time is not sandbox time
+  (ADR-0002), but ALL elapsed time counts toward A's task budget.
+- Tool calls have finite per-call timeouts; B stops processes it
+  owns. Deferred restart is allowed (recreate the worker on the next
+  `execute`).
+- Discriminating test (binding): the slow-tool test must sleep
+  LONGER than timeout + grace, so it fails if the deadline extension
+  is ever broken (a shorter tool passes on defective code — known
+  failure mode).
 
-## 4. Output tee
+## 4. Wire protocol v1.1 (worker ↔ parent)
 
-Inside an exec the worker replaces sys.stdout with a tee that
-(a) accumulates the full text for the result message and (b) emits a
-stdout event per chunk — so partial output survives a kill. The
-worker caps what it reports at 10,000 chars per exec, appending a
-"[truncated N chars]" note; the cap counts the note itself (the
-note fits inside the cap, mirroring the tool-result cap rule), and
-the note appears in `result.stdout` — and in the final stdout
-event, which the tee emits capped the same way. THE PROTOCOL
-CHANNEL ITSELF never carries user output except inside stdout
-events and result fields.
+Framing: JSON Lines on the worker's stdin/stdout — one UTF-8 JSON
+object per line, `"v": 1`. The protocol channel carries protocol
+only (worker's own logs → stderr). `exec_id` never repeats during a
+`SandboxProcess` lifetime, including across restarts; `call_id` is
+unique within an execution. The parent rejects mismatched tool
+replies and discards stale events; missing/invalid fields fail
+explicitly; only validated current messages change state.
 
-## 5. Time and the tool-time exemption
+### Messages
 
-Tool-call time is NOT sandbox time. Per exec the parent computes
-base_deadline = now + config.max_execution_time_seconds + grace
-(5 s). While a tool_call is in flight (sent, no tool_result yet) the
-parent waits with NO timeout — the deadline is suspended; when the
-tool_result arrives the parent ADDS the call's measured wall
-duration to the deadline. On expiry: SIGTERM to the worker's process
-group, 2 s grace, then SIGKILL; report timeout with partial stdout;
-restart the worker. A consequence, stated as a test requirement
-(T08): a tool that sleeps longer than timeout + grace must still
-return its result with status ok, while pure `while True: pass`
-code must still time out.
+| type | Direction | Fields |
+|---|---|---|
+| `init` | P→W | `config` (SandboxConfig dict; `{}` = defaults), `tools` (see below) |
+| `ready` | W→P | — |
+| `exec` | P→W | `exec_id`, `code` |
+| `tool_call` | W→P | `exec_id`, `call_id`, `name`, `arguments` |
+| `tool_result` | P→W | `exec_id`, `call_id`, `is_error`, `text` |
+| `stdout` | W→P | `exec_id`, `text` (streamed user output) |
+| `result` | W→P | `exec_id`, `status`, `stdout`, `error`, `final_answer`, `exit_code` (system_exit only) |
+| `shutdown` | P→W | — |
 
-Measurement endpoints: the call's duration is measured from receipt
-of `tool_call` to send of `tool_result` — the only interval the
-parent can observe. The worker is single-threaded: at most one
-tool_call is in flight at any moment. INVARIANT: every `tool_call`
-receives exactly one `tool_result`, always — during flight the
-parent waits with NO timeout, so a lost reply would hang the agent
-forever; the parent's dispatch callback never raises and always
-answers (its errors become `[TOOL ERROR]`-prefixed text).
+### init.tools — minimal wire projection (T04 position; retained)
 
-## 6. final_answer semantics
+The wire carries only what the worker needs to build stubs:
 
-final_answer(answer) is injected by the worker into the execution
-namespace (never an MCP tool). It writes a module-level slot FIRST,
-then raises FinalAnswerSignal(BaseException). After user code
-finishes — regardless of how: normal return, caught exception,
-uncaught exception — the worker checks the slot: if set, the result
-status is "final" and final_answer carries the slot's value, EVEN IF
-user code caught the signal or another exception followed it.
+```json
+{"name": "run_tests", "description": "…", "parameter_order": ["code", "test_list", "test_imports"]}
+```
 
-The slot is RESET at the start of every exec: a `final` status and
-its answer belong to exactly one exec and can never leak into the
-next one. (Consequence for the agent loop: after a final-check
-rejection the next exec starts with a clean slot — a stale answer
-cannot be re-reported.) Within one exec a second `final_answer`
-call overwrites the slot (last write wins).
+`python_name` is NOT sent: the worker derives stub names itself via
+`derive_python_name` (§1). If stub names were parent-supplied, a
+discovery bug or a hostile/unknown MCP server could name a stub
+`final_answer` and shadow the sandbox's own construct — stub naming
+is worker-side policy in exactly one place. The full `ToolInfo`
+(including `input_schema`) lives in the neutral module and is used
+in-process by the parent and dispatch boundary; it is not
+serialized to the worker. *(Only deviation from the A/B proposal;
+its own §3 "B installs worker stubs from ToolInfo" is satisfied —
+the projection is pinned to a layer.)*
 
-`final` outranks `error` AND `keyboard_interrupt`/`system_exit` for
-the exec's status: if the slot is set, the worker reports `final`
-and does NOT re-raise the flow-control exception to the parent — a
-called final_answer means the task is done; the parent re-raises
-KeyboardInterrupt/SystemExit only when NO final answer was recorded.
+### Result semantics (T04 core; retained)
 
-## 7. Flow control
+- Wire statuses are ONLY `ok | error | final | keyboard_interrupt |
+  system_exit`. The parent derives `timeout` (deadline expired) and
+  `killed` (worker died) — a dead worker sends nothing.
+- `result.stdout` REPLACES the streamed accumulation — never
+  concatenate both copies. On timeout/death without a result, the
+  parent retains accumulated streamed output up to the cap.
+- `final` is set whenever `final_answer()` was called (slot; first
+  answer wins), even if user code caught the signal.
+- `system_exit` carries `exit_code`; `keyboard_interrupt` uses the
+  same fields without it. The parent re-raises both.
+- After a kill the worker is assumed dead; the parent restarts it
+  (possibly deferred to the next `execute`).
+- EOF or malformed lines during execution → `SandboxError` with
+  partial output attached. Unexpected death without corruption →
+  `killed`.
 
-User code raising KeyboardInterrupt or SystemExit produces the
-respective wire statuses; the PARENT re-raises them into the agent
-loop when no final answer was recorded (§6 — a recorded final wins
-and is not interrupted). They control shutdown; when re-raised they
-are never swallowed. The exit code of SystemExit is not carried on
-the wire (the status is what matters; the parent re-raises a bare
-SystemExit). The worker never sends anything on stdout that is not
-a valid protocol message; the parent treats an unparsable line as
-worker death (kill + restart, status killed) — fail-closed, no
-guesswork parsing.
+### Example — init and one tool call
 
-## 8. In-process helper (tests and REPL)
+```json
+{"v":1,"type":"init","config":{},"tools":[{"name":"run_tests","description":"Run candidate code against tests","parameter_order":["code","test_list","test_imports"]}]}
+{"v":1,"type":"ready"}
+{"v":1,"type":"exec","exec_id":1,"code":"print(run_tests(code='def f(): return 1', test_list=['assert f() == 1']))"}
+{"v":1,"type":"tool_call","exec_id":1,"call_id":1,"name":"run_tests","arguments":{"code":"def f(): return 1","test_list":["assert f() == 1"]}}
+{"v":1,"type":"tool_result","exec_id":1,"call_id":1,"is_error":false,"text":"{\"success\":true,\"output\":\"\"}"}
+{"v":1,"type":"stdout","exec_id":1,"text":"{\"success\":true,\"output\":\"\"}\n"}
+{"v":1,"type":"result","exec_id":1,"status":"ok","stdout":"{\"success\":true,\"output\":\"\"}\n","error":null,"final_answer":null}
+```
 
-sandbox/worker.py additionally exposes run_code(code, cfg, tools) as
-a plain in-process function running the SAME pipeline as the
-protocol path — parse → scan → rewrite → fix_missing_locations →
-compile → exec under the same restrictions (fix_missing_locations
-is load-bearing: the rewrite creates nodes without location info
-and compile() rejects them without it). run_code is the IN-PROCESS
-helper for TESTS only: same restriction pipeline, no timeout/kill
-semantics (a test that needs kill semantics uses the protocol path
-via SandboxProcess). The REPL (T09) does NOT use run_code — it
-drives a real SandboxProcess so per-entry timeout, memory limits
-and restart semantics apply to human-typed code exactly as to agent
-code. Anything protocol-specific (tee streaming, message ids) lives
-only in the protocol main loop.
+### Example — terminal results
 
-## 9. Message sequence (example)
+```json
+{"v":1,"type":"result","exec_id":2,"status":"error","stdout":"","error":"NameError: name 'x' is not defined","final_answer":null}
+{"v":1,"type":"result","exec_id":3,"status":"final","stdout":"","error":null,"final_answer":"def f(): return 1"}
+{"v":1,"type":"result","exec_id":4,"status":"system_exit","stdout":"","error":null,"final_answer":null,"exit_code":0}
+{"v":1,"type":"shutdown"}
+```
 
-One exec with a tool call, annotated. `P` lines go parent → worker
-stdin, `W` lines worker → parent stdout.
+## 5. Boundary policies
 
-    P: {"type": "init", "config": {...}, "tools":
-        [{"name": "run_tests", "description": "...",
-          "params": ["code", "test_list"]}]}     exactly once, per
-                                                 process
-    W: {"type": "ready"}                         worker is armed
-    P: {"type": "exec", "id": 7, "code": "...user code..."}
-    W: {"type": "stdout", "id": 7, "chunk": "running tests\n"}
-                                                 tee streams early
-    W: {"type": "tool_call", "call": 1, "id": 7,
-        "name": "run_tests", "args": {"code": "...",
-        "test_list": ["assert f(1) == 2"]}}      stub forwards
-    P: {"type": "tool_result", "call": 1,
-        "text": "{'success': True, ...}"}        pre-formatted;
-        [deadline suspended during this call, then extended by the
-         call's measured duration — §5]
-    W: {"type": "stdout", "id": 7, "chunk": "tests passed\n"}
-    W: {"type": "result", "id": 7, "status": "ok",
-        "stdout": "running tests\ntests passed\n", "error": null,
-        "final_answer": null}                    end of the exec
+- **MCP boundary:** A is the client (discovery, manual generation,
+  alias mapping, dispatcher); B provides `mcp_tools_mbpp.py` and
+  `mcp_tools_swebench.py`, independently testable without the agent
+  loop, stdio + streamable HTTP, unknown-server compatible.
+  `run_tests` (MBPP) returns MCP text containing
+  `{"success": bool, "output": str}` — a failing candidate is a
+  successful tool call with `success:false`; only service/configuration
+  failures are tool errors.
+- **SWE-bench tools:** the nine tools with the plan's pinned output
+  formats, identical across local/Docker modes; B owns TESTBED_PATH
+  confinement, AGENT_CONTAINER selection, EVAL_SCRIPT_PATH.
+- **get_patch:** returns a COMPLETE patch or an explicit error —
+  never a truncated success value (A/B proposal; adopted. A silently
+  truncated patch is an unappliable submission). Threshold number:
+  open question §6.
+- **Guest feeding:** tool values delivered into guest scope are
+  uncapped on the dispatch path (tools bound their own payload caps;
+  the worker caps what the guest prints). Observation caps apply
+  when formatting for the LLM.
+- **Credentials:** provider keys stay with the LLM client; child
+  environments are filtered (no `*API_KEY*` forwarding to workers,
+  tools or containers); never logged.
+- **Cleanup:** A's CLI coordinates; B provides bounded worker and
+  container cleanup. Reserve time for `solution.json`, preserve the
+  original error, and never rely on `finally` or signal handlers
+  after SIGKILL.
 
-A later exec reuses the same worker with the next exec id (8, 9, …);
-after a timeout/killed the next exec id still advances, but it runs
-on a fresh worker with empty variable state (§3).
+## 6. Open questions for the joint review
 
-Caught-final case (§6): the slot wins even when user code swallows
-the signal, and the next exec starts with a clean slot.
-
-    P: {"type": "exec", "id": 12, "code":
-        "try:\n    final_answer(\"v1\")\nexcept BaseException:\n    pass"}
-        (user code catches the FinalAnswerSignal — no traceback)
-    W: {"type": "result", "id": 12, "status": "final",
-        "stdout": "", "error": null, "final_answer": "v1"}
-        [the next exec (id 13) starts with a CLEAN slot — a stale
-         answer cannot be re-reported]
+- [ ] Names → roles confirmation and the T10/T11 → B transfer
+      (with ADR; separate from this document).
+- [ ] T27 split: B leads unknown-server testing, A fixes client
+      findings.
+- [ ] Wave re-sequencing: B's serial chain grows with T10/T11 —
+      revisit the parallel plan.
+- [ ] `get_patch` oversize threshold; confirm the 10 000-char
+      output cap.
+- [ ] Startup/shutdown timeout values (proposal: ready ≤ 30 s,
+      shutdown ≤ 3 s + kill).
+- [ ] Docker lifecycle API (needed before T24; not for the first
+      MBPP integration).
+- [ ] First joint gate: one real MBPP task end to end
+      (CLI → LLM → sandbox → MCP tool), trace and metrics checked,
+      `solution.json` passing the moulinette.
