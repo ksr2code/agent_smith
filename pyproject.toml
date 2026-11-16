@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-smith"
+version = "0.1.0"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "pydantic>=2",
+    "mcp<2",
+]
+
+[project.scripts]
+# Forward declaration: sandbox/cli.py lands in T09. The entry point
+# does not break `uv sync`; it only resolves once the module exists.
+sandbox = "sandbox.cli:main"
+
+[tool.hatch.build.targets.wheel]
+# models.py (T02, verbatim grader contract) and solution_io.py (T03)
+# are installed via py-modules; both land at the repo root (ADR-0010).
+packages = ["sandbox", "agent", "llm", "mcp_client"]
+py-modules = ["models", "solution_io"]
+
+[tool.ruff]
+line-length = 79
+# The example moulinette is grader reference material (gitignored,
+# documented provenance) — never our linting surface.
+# models.py is a verbatim copy of the grader's contract file — its
+# formatting is the grader's, not ours; exclude it from style.
+extend-exclude = ["moulinette", "models.py"]
+
+[tool.mypy]
+disallow_untyped_defs = true
+# solution_io.py is OUR typed code and must be type-checked;
+# models.py stays out (provenance verbatim copy, excluded from our
+# style surface like the moulinette itself).
+files = ["sandbox", "agent", "llm", "mcp_client", "solution_io.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "flake8>=7.1",
+]

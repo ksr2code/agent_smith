@@ -136,6 +136,23 @@ repo/
 | M4 | T21–T25 | one pool task `validate swebench` PASSED **before** tuning; final-prompt pool ≥4/6; re-draw reproducible; ≥4 hold-outs recorded; metrics on 3 traces |
 | M5 | T26–T32 | red-team closed; lint/types/test clean; Linux + bare-VM passes; **freeze declared**; matrix ≥5×≥2×3 + ablation; report; README; runbook ≤10 min; live-mod drill; `v1.0` |
 
+**Kickoff schedule — set 2026-11-11 (deadline: end of December 2026):**
+
+| Gate | Target | Scope |
+|---|---|---|
+| M0 | Fri 2026-11-13 | Foundations (T01–T05) |
+| M1 | Fri 2026-11-20 | Sandbox (T06–T09) |
+| M2 | Fri 2026-11-27 | Tools + client + LLM (T10–T17) |
+| M3 | Fri 2026-12-04 | MBPP end-to-end (T18–T20) |
+| M4 | Wed 2026-12-16 | SWE-bench (T21–T25) — longest block, riskiest phase |
+| M5 | Tue 2026-12-29 | Hardening, freeze, benchmarks, delivery (T26–T32) |
+
+Cut-line: Mon 2026-12-14 — "Where to cut if behind" (end of this
+plan) applies from this date. v1.0 tag: 2026-12-29; 2026-12-30/31
+are untouched reserve. The critical path (T18 → T20 → T24 → T25 →
+T28 → T29) is entirely agent-side. Schedule ratified by A on
+2026-11-11; B ratifies asynchronously.
+
 At kickoff: give every gate a **target date** and set a **cut-line
 date** — the day "Where to cut if behind" starts applying. The
 critical path is T18 → T20 → T24 → T25 → T28 → T29, all on the

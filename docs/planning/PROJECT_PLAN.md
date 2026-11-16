@@ -3,7 +3,8 @@
 > Strategy layer: tasks live in docs/planning/IMPLEMENTATION_PLAN.md,
 > daily routine in docs/planning/TEAM_WORKFLOW.md.
 
-Team: 2 people. Tracking: GitHub Issues per milestone gate. Linting
+Team: 2 people. Tracking: docs/TRACKER.md (in-repo; GitHub optional
+later). Linting
 and type checking run by hand (no hooks — a team choice; the subject
 only requires readable, structured, documented code). This plan
 is the starting point; adjust it as you learn — and record *why* in

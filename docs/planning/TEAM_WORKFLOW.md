@@ -77,8 +77,10 @@ Rules:
    sandbox-adjacent work). Run `ruff format <file>` on what you
    wrote.
 5. Push and open a PR early (draft is fine). Description: what
-   changed, why, how to test, `Closes #<issue>` if one exists.
-6. Ask the other member to review. Move the issue to review.
+   changed, why, how to test; the tracker row in docs/TRACKER.md is
+   updated in the same commit.
+6. Ask the other member to review. Set the tracker row to
+   in-progress/review.
 7. Fix every comment (answer each, even with "done"), re-run tests,
    wait for approval, merge (squash default), delete the branch.
 
@@ -141,7 +143,7 @@ automatically (this project has no CI) and never on unfrozen code.
 to reverse, had real alternatives, or a reviewer could ask "why not
 X?". Process: draft with Status: Proposed → PR containing only the
 ADR → discuss and challenge → Accepted (both agree; the architect
-finalizes) → link from related issues. Never rewrite an accepted ADR:
+finalizes) → link the tracker row. Never rewrite an accepted ADR:
 supersede it. Keep `docs/adr/README.md` as the index. First ADRs:
 0001 subprocess sandbox, 0002 MCP client in the parent, 0003
 SWE-bench layout, 0004 action formats, 0005 imports policy (with the
@@ -185,7 +187,7 @@ Breaking any of these can fail the project:
 |---|---|
 | Start work | Next task in my area from the current milestone; branch `feat/<area>-<name>` |
 | Get reviewed | PR → other member reviews → merge (author never reviews own code) |
-| Report a bug | Issue: what happened, expected, reproduce command |
+| Report a bug | Tracker row in docs/TRACKER.md: what happened, expected, reproduce command |
 | Record a decision | ADR PR (Proposed → discuss → Accepted) |
 | Change an interface contract | Architect sign-off BEFORE implementation |
 | End a milestone | Gate evidence to the architect; retro line in `docs/log.md` |
