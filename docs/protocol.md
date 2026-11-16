@@ -1,7 +1,7 @@
 # Sandbox worker protocol
 
-Status: seam contract v1 (T04). Changes require architect sign-off
-per docs/planning/TEAM_WORKFLOW.md §2. Both members review this file.
+Status: working draft (T04) — pending joint review alongside the
+A/B interface proposal.
 
 ## 1. Transport and framing
 

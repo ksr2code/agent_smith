@@ -1,7 +1,7 @@
 # ADR-0002: MCP client in the parent, tool stubs in the worker
-- Status: Accepted
+- Status: Proposed
 - Date: 2026-11-11
-- Deciders: A + B (pre-aligned in PROJECT_PLAN §2, committed 95c6169)
+- Deciders: A + B (pre-aligned in PROJECT_PLAN §2, committed 95c6169) (pending joint ratification)
 
 ## Context
 

@@ -1,8 +1,8 @@
 # ADR-0001: Restricted worker subprocess as the sandbox isolation
 # unit
-- Status: Accepted
+- Status: Proposed
 - Date: 2026-11-11
-- Deciders: A + B (pre-aligned in PROJECT_PLAN §2, committed 95c6169)
+- Deciders: A + B (pre-aligned in PROJECT_PLAN §2, committed 95c6169) (pending joint ratification)
 
 ## Context
 

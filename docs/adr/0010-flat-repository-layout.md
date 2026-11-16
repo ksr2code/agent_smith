@@ -1,8 +1,8 @@
 # ADR-0010: Keep code packages at the repository root (no nested
 # student/ directory)
-- Status: Accepted
+- Status: Proposed
 - Date: 2026-11-11
-- Deciders: A + B (pre-aligned in PROJECT_PLAN §2, committed 95c6169)
+- Deciders: A + B (pre-aligned in PROJECT_PLAN §2, committed 95c6169) (pending joint ratification)
 
 ## Context
 
