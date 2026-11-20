@@ -103,17 +103,42 @@ def _client(
     scripted: _Scripted,
     models: dict,
     monkeypatch: pytest.MonkeyPatch,
-    env: dict[str, str],
+    env: dict[str, str | None],
     **kwargs: object,
 ) -> LLMClient:
-    for name, value in env.items():
-        monkeypatch.setenv(name, value)
+    defaults = {
+        "T15_KEY_A1": "sk-a1",
+        "T15_KEY_A2": "sk-a2",
+        "T15_KEY_B1": "sk-b1",
+        "T15_KEY_B2": "sk-b2",
+    }
+    merged = {**defaults, **env}
+    for name, value in merged.items():
+        if value is None:  # explicit None = leave unset (zero-key case)
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
     return LLMClient(
         models,
         transport=httpx.MockTransport(scripted.handler),
         sleep=scripted,
         **kwargs,  # type: ignore[arg-type]
     )
+
+
+class _FakeClock:
+    """Injectable monotonic clock: tests advance it manually, so
+    wall-clock pacing is deterministic (a recorded sleep does NOT
+    advance it — the test says how much time passed)."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
 
 
 _MESSAGES = [{"role": "user", "content": "hello"}]
@@ -229,7 +254,7 @@ def test_reset_retry_exhausted_raises_llm_error(
         monkeypatch,
         {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
     )
-    with pytest.raises(LLMError, match="rate limited"):
+    with pytest.raises(LLMError, match="HTTP 429: rate limited"):
         client.generate(_MESSAGES, "zephyr")
     assert len(scripted.auths) == 3  # one reset round only
 
@@ -240,6 +265,7 @@ def test_auth_rejection_exhausts_key_permanently(
     # Discriminates: reusing a 401'd key on the next generate call —
     # auth failures must mark the key exhausted permanently.
     scripted = _Scripted()
+    clock = _FakeClock()
     scripted.add(401, {"error": {"message": "bad key"}})
     scripted.add(200, _reply())
     scripted.add(200, _reply())
@@ -253,6 +279,7 @@ def test_auth_rejection_exhausts_key_permanently(
             "T15_KEY_B1": "sk-b1",
             "T15_KEY_B2": "sk-b2",
         },
+        clock=clock,
     )
     first = client.generate(_MESSAGES, "zephyr")
     second = client.generate(_MESSAGES, "zephyr")
@@ -365,6 +392,52 @@ def test_other_4xx_raises_llm_error_with_provider_message(
     assert len(scripted.auths) == 1  # not retryable — fail loudly
 
 
+def test_malformed_choices_payload_raises_llm_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: a 200 whose choices[0] is not an object crashing
+    # with AttributeError instead of a diagnosable LLMError.
+    scripted = _Scripted()
+    scripted.add(200, {"choices": ["garbage"]})
+    client = _client(
+        scripted,
+        _models_ab(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+    )
+    with pytest.raises(LLMError, match="malformed"):
+        client.generate(_MESSAGES, "zephyr")
+
+
+def test_models_json_loaded_from_file_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # Discriminates: the str/Path loading branch of models_json —
+    # only ever exercised dict fixtures before.
+    models_file = tmp_path / "models.json"
+    models_file.write_text(json.dumps(_models_ab()), encoding="utf-8")
+    scripted = _Scripted()
+    scripted.add(200, _reply())
+    client = _client(
+        scripted,
+        str(models_file),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+    )
+    resp = client.generate(_MESSAGES, "zephyr")
+    assert resp.api_url == _A_URL
+    scripted = _Scripted()  # also the Path form
+    scripted.add(200, _reply())
+    client = _client(
+        scripted,
+        models_file,
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+    )
+    assert client.generate(_MESSAGES, "zephyr").text == "hi"
+
+
 def test_stop_and_max_tokens_reach_the_request_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -455,8 +528,9 @@ def test_pacing_between_generate_calls(
 ) -> None:
     # Discriminates: hammering the free tier — consecutive requests
     # must space at least min_request_interval_s apart (recorded,
-    # never real-slept).
+    # never real-slept). First-ever call never sleeps.
     scripted = _Scripted()
+    clock = _FakeClock()
     scripted.add(200, _reply())
     scripted.add(200, _reply())
     client = _client(
@@ -464,12 +538,118 @@ def test_pacing_between_generate_calls(
         _models_ab(),
         monkeypatch,
         {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+        clock=clock,
     )
     client.generate(_MESSAGES, "zephyr")
     assert scripted.sleeps == []  # first request: no pacing
     client.generate(_MESSAGES, "zephyr")
-    assert scripted.sleeps == [4.0]
-    assert scripted.sleeps[0] >= 4.0
+    assert scripted.sleeps == [4.0]  # zero elapsed → full interval
+
+
+def test_pacing_sleeps_only_the_remainder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: a full-interval sleep on top of elapsed wall
+    # time — only interval minus elapsed may be slept, and a call
+    # long after the last request must not sleep at all.
+    scripted = _Scripted()
+    clock = _FakeClock()
+    scripted.add(200, _reply())
+    scripted.add(200, _reply())
+    scripted.add(200, _reply())
+    client = _client(
+        scripted,
+        _models_ab(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+        clock=clock,
+    )
+    client.generate(_MESSAGES, "zephyr")
+    clock.advance(1.0)  # 1 s of the 4 s window already elapsed
+    client.generate(_MESSAGES, "zephyr")
+    assert scripted.sleeps == [3.0]  # remainder only
+    clock.advance(100.0)  # far apart — window fully elapsed
+    client.generate(_MESSAGES, "zephyr")
+    assert scripted.sleeps == [3.0]  # no further sleep
+
+
+def test_zero_key_provider_warns_and_error_names_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: a provider whose env vars are all unset failing
+    # with a generic "last failure: unknown" — construction must warn
+    # naming the env-var NAMES (never values), and the final error
+    # must say no keys were resolved, not pretend a request failed.
+    scripted = _Scripted()
+    with pytest.warns(UserWarning) as caught:
+        client = LLMClient(
+            _models_ab(),
+            transport=httpx.MockTransport(scripted.handler),
+            sleep=scripted,
+        )
+    messages = [str(warning.message) for warning in caught]
+    assert any("prov_a" in m and "T15_KEY_A1" in m for m in messages)
+    assert any("prov_b" in m and "T15_KEY_B2" in m for m in messages)
+    assert not any("sk-" in m for m in messages)  # names, never values
+    with pytest.raises(LLMError, match="no API keys resolved") as excinfo:
+        client.generate(_MESSAGES, "zephyr")
+    message = str(excinfo.value)
+    assert "prov_a" in message and "prov_b" in message
+    assert "T15_KEY_B2" in message  # unresolved env names, no values
+    assert scripted.auths == []  # no request was ever attempted
+
+
+def test_rate_limited_keys_reopen_on_next_generate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: a 429-exhausted key staying benched forever —
+    # per-minute windows reopen, so the next generate() call must
+    # serve the same key again.
+    scripted = _Scripted()
+    scripted.add(429, {"error": {"message": "rate limited"}})
+    scripted.add(429, {"error": {"message": "rate limited"}})
+    scripted.add(429, {"error": {"message": "rate limited"}})
+    scripted.add(200, _reply())
+    client = _client(
+        scripted,
+        _models_a(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+    )
+    with pytest.raises(LLMError):
+        client.generate(_MESSAGES, "zephyr")  # reset retry 429s too
+    resp = client.generate(_MESSAGES, "zephyr")  # window reopened
+    assert resp.text == "hi"
+    assert scripted.auths == [
+        "Bearer sk-a1",
+        "Bearer sk-a2",
+        "Bearer sk-a1",  # reset retry
+        "Bearer sk-a2",  # gen2: pointer resumes, both keys reopened
+    ]
+
+
+def test_auth_exhausted_keys_never_rejoin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: the reopen sweeping auth-rejected keys back in —
+    # a 401'd key must stay out across generate() calls, and the
+    # error must say the keys are exhausted (not "unknown").
+    scripted = _Scripted()
+    scripted.add(401, {"error": {"message": "bad key"}})
+    client = _client(
+        scripted,
+        _models_a(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": None},  # one key only
+    )
+    with pytest.raises(LLMError, match="key rejected \\(HTTP 401\\)"):
+        client.generate(_MESSAGES, "zephyr")
+    with pytest.raises(
+        LLMError,
+        match=r"all keys of provider\(s\) 'prov_a' are exhausted",
+    ):
+        client.generate(_MESSAGES, "zephyr")
+    assert scripted.auths == ["Bearer sk-a1"]  # no further requests
 
 
 def test_env_file_loaded_with_real_env_precedence(
@@ -547,6 +727,19 @@ def test_keyring_exhaustion_returns_none() -> None:
     assert KeyRing([]).next_key() is None
 
 
+def test_keyring_reset_reopens_only_rate_limited() -> None:
+    # Discriminates: reset() sweeping permanently retired keys back
+    # in — rate windows reopen, auth rejections never do.
+    ring = KeyRing(["k1", "k2"])
+    ring.mark_exhausted("k1")  # rate-limited (default)
+    ring.mark_exhausted("k2", permanent=True)  # auth-rejected
+    assert ring.next_key() is None
+    ring.reset()
+    assert ring.next_key() == "k1"  # rate-limited reopened
+    ring.mark_exhausted("k1")  # bench it again so only k2 remains
+    assert ring.next_key() is None  # k2 was permanent — still out
+
+
 def test_keyring_repr_never_contains_key_material() -> None:
     ring = KeyRing(["super-secret-value"])
     assert "super-secret-value" not in repr(ring)
@@ -571,6 +764,27 @@ def test_sanity_check_usage_flags_divergence(
     note = sanity_check_usage(resp.text, resp)
     assert note is not None
     assert "5000" in note
+
+
+def test_sanity_check_usage_empty_text_with_reported_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: the empty-reply boundary — ANY reported output
+    # tokens with zero visible text is the hidden-reasoning
+    # signature, not just large counts.
+    scripted = _Scripted()
+    usage = {"prompt_tokens": 10, "completion_tokens": 3}
+    scripted.add(200, _reply(content="", usage=usage))
+    client = _client(
+        scripted,
+        _models_ab(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+    )
+    resp = client.generate(_MESSAGES, "zephyr")
+    note = sanity_check_usage(resp.text, resp)
+    assert note is not None
+    assert "infinite" in note
 
 
 def test_sanity_check_usage_quiet_when_aligned(

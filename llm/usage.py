@@ -27,7 +27,9 @@ def sanity_check_usage(text: str, usage: LLMResponse) -> str | None:
     output_tokens = usage.output_tokens
     implied = len(text) / 4.0
     if implied == 0.0:
-        divergent = output_tokens > 5
+        # Empty reply: ANY reported output token is invisible work —
+        # the extreme hidden-reasoning signature.
+        divergent = output_tokens > 0
         ratio_text = "infinite"
     elif output_tokens == 0:
         divergent = True

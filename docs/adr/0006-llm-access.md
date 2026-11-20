@@ -53,4 +53,18 @@ model, and always reports `model_name` as the canonical name.
   `estimated` in `usage_raw`.
 - Keys exist in code only as env-var NAMES; values are resolved at
   construction (`.env` parsed with the stdlib, real environment
-  wins) and are never logged or rendered in errors.
+  wins) and are never logged or rendered in errors. A provider with
+  zero resolved keys warns at construction (naming the env-var
+  names) and the exhaustion error says so, instead of a generic
+  request-failure message.
+
+- Ring reopen semantics: rate windows are per-minute, so every
+  `generate()` call reopens rate-limited keys first — a 429 (and a
+  capped 5xx streak, which yields the key back as rate-limited)
+  only benches a key for the current call. Auth rejections
+  (401/402/403) retire the key permanently; no reset ever reopens
+  it.
+
+- Pacing is wall-clock-aware: the client records when each request
+  completed and at call entry sleeps only the remainder of the
+  interval — a call long after the previous one sleeps nothing.

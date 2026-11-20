@@ -32,6 +32,7 @@ logged: they appear only in the Authorization header.
 import json
 import os
 import time
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,7 +97,9 @@ class _Provider:
 
 
 def _parse_env_file(path: Path) -> dict[str, str]:
-    """Stdlib-only .env parsing: KEY=VALUE lines, quotes stripped."""
+    """Stdlib-only .env parsing: KEY=VALUE lines, quotes stripped.
+    (Kept simple on purpose: the value is split on the FIRST '=' and
+    only whole surrounding quotes are stripped.)"""
     values: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -142,14 +145,18 @@ class LLMClient:
         backoff_s: float = 1.0,
         sleep: Callable[[float], None] | None = None,
         min_request_interval_s: float = 4.0,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self._backoff_s = backoff_s
         self._sleep = sleep if sleep is not None else time.sleep
+        self._clock = clock if clock is not None else time.monotonic
         self._min_request_interval_s = min_request_interval_s
         self.timeout = _TIMEOUT
         self._http = httpx.Client(transport=transport, timeout=self.timeout)
         self._request_count = 0
+        self._last_request_at: float | None = None
         self._env_file_values: dict[str, str] = {}
+        self._unresolved_env: dict[str, list[str]] = {}
         env_file = Path.cwd() / ".env"
         if env_file.is_file():
             self._env_file_values = _parse_env_file(env_file)
@@ -194,6 +201,23 @@ class LLMClient:
                 for key in [self._resolve_key(env_name)]
                 if key is not None
             ]
+            if not keys:
+                # Names only, never values — a value must never reach
+                # a message.
+                unset = [
+                    str(env_name)
+                    for env_name in env_names
+                    if not (
+                        isinstance(env_name, str)
+                        and self._resolve_key(env_name)
+                    )
+                ]
+                self._unresolved_env[name] = unset
+                warnings.warn(
+                    f"provider '{name}': no API keys resolved — "
+                    f"check env vars: {', '.join(unset)}",
+                    stacklevel=2,
+                )
             providers.append(
                 _Provider(
                     name=name,
@@ -219,8 +243,15 @@ class LLMClient:
         chain = [p for p in self._providers if model in p.models]
         if not chain:
             raise LLMError(f"no provider serves model '{model}'")
+        # Rate windows are per-minute: reopen rate-limited keys once
+        # per call; permanently retired keys stay out (KeyRing.reset).
+        for ring in self.rings.values():
+            ring.reset()
         if self._request_count > 0:
-            self._sleep(self._min_request_interval_s)
+            elapsed = self._clock() - (self._last_request_at or 0.0)
+            wait = self._min_request_interval_s - elapsed
+            if wait > 0.0:
+                self._sleep(wait)
         return self._run_chain(chain, model, messages, stop, max_tokens)
 
     def _run_chain(
@@ -235,6 +266,7 @@ class LLMClient:
         backoff_stage = 0
         last_rate_limited = False
         last_failure = "unknown"
+        attempted = False
         reset_used = False
         index = 0
         while index < len(chain):
@@ -246,7 +278,8 @@ class LLMClient:
                     key = ring.next_key()
                 if key is None:
                     break
-                started = time.monotonic()
+                started = self._clock()
+                attempted = True
                 try:
                     payload = self._post(
                         provider, key, model, messages, stop, max_tokens
@@ -262,8 +295,9 @@ class LLMClient:
                         backoff_stage = 0
                         continue
                     if exc.status in _AUTH_FAILURES:
-                        # Key rejected: exhausted permanently.
-                        ring.mark_exhausted(key)
+                        # Key rejected: exhausted permanently — it must
+                        # never rejoin, not even via a ring reset.
+                        ring.mark_exhausted(key, permanent=True)
                         key = None
                         last_rate_limited = False
                         last_failure = f"key rejected (HTTP {exc.status})"
@@ -296,7 +330,7 @@ class LLMClient:
                         continue
                     self._sleep(self._backoff_s * 2 ** (backoff_stage - 1))
                     continue
-                request_ms = (time.monotonic() - started) * 1000.0
+                request_ms = (self._clock() - started) * 1000.0
                 return self._parse_response(
                     payload, provider, model, retries, request_ms, messages
                 )
@@ -315,18 +349,27 @@ class LLMClient:
                 self._sleep(self._backoff_s)
                 key = ring.next_key()
                 if key is not None:
-                    started = time.monotonic()
+                    started = self._clock()
+                    attempted = True
                     try:
                         payload = self._post(
                             provider, key, model, messages, stop, max_tokens
                         )
-                    except (_HTTPError, httpx.TransportError):
+                    except _HTTPError as exc:
                         retries += 1
                         raise LLMError(
                             f"all providers exhausted for model "
-                            f"'{model}' (last failure: rate limited)"
+                            f"'{model}' (last failure: HTTP "
+                            f"{exc.status}: {exc.message})"
                         ) from None
-                    request_ms = (time.monotonic() - started) * 1000.0
+                    except httpx.TransportError as exc:
+                        retries += 1
+                        raise LLMError(
+                            f"all providers exhausted for model "
+                            f"'{model}' (last failure: transport error "
+                            f"({type(exc).__name__}))"
+                        ) from None
+                    request_ms = (self._clock() - started) * 1000.0
                     return self._parse_response(
                         payload,
                         provider,
@@ -336,6 +379,26 @@ class LLMClient:
                         messages,
                     )
             index += 1
+        if not attempted:
+            zero_key = [
+                name
+                for name in self._unresolved_env
+                if any(p.name == name for p in chain)
+            ]
+            if zero_key:
+                detail = "; ".join(
+                    f"provider '{name}' (unset env vars: "
+                    f"{', '.join(self._unresolved_env[name])})"
+                    for name in zero_key
+                )
+                raise LLMError(
+                    f"no API keys resolved for model '{model}' — {detail}"
+                )
+            raise LLMError(
+                f"all providers exhausted for model '{model}' — all "
+                f"keys of provider(s) "
+                f"{', '.join(repr(p.name) for p in chain)} are exhausted"
+            )
         raise LLMError(
             f"all providers exhausted for model '{model}' "
             f"(last failure: {last_failure})"
@@ -359,12 +422,17 @@ class LLMClient:
         if max_tokens is not None:
             body["max_tokens"] = max_tokens
         self._request_count += 1
-        response = self._http.post(
-            provider.api_url,
-            json=body,
-            headers={"Authorization": f"Bearer {key}"},
-            timeout=self.timeout,
-        )
+        try:
+            response = self._http.post(
+                provider.api_url,
+                json=body,
+                headers={"Authorization": f"Bearer {key}"},
+                timeout=self.timeout,
+            )
+        finally:
+            # Wall-clock pacing counts every completed exchange —
+            # failed ones included.
+            self._last_request_at = self._clock()
         if response.status_code >= 400:
             raise _HTTPError(
                 response.status_code, _provider_error_message(response)
@@ -394,6 +462,11 @@ class LLMClient:
         if not isinstance(choices, list) or not choices:
             raise LLMError(f"provider '{provider.name}' returned no choices")
         choice = choices[0]
+        if not isinstance(choice, dict):
+            raise LLMError(
+                f"provider '{provider.name}' returned a malformed "
+                f"choice (expected an object)"
+            )
         message = choice.get("message") or {}
         content = message.get("content")
         text = "" if content is None else str(content)
