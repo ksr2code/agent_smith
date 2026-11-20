@@ -43,7 +43,7 @@ under "Milestones and gates" — that section stays authoritative.)
 | T12 | MCP client manager + stubs | A | todo | needs T08 + one server |
 | T13 | Tool result formatting | A | todo | — |
 | T14 | Dynamic sandbox manual | A | todo | — |
-| T15 | LLM client, keys, usage | A | in-progress | llm/ + tests green; review nits applied; one real tiny call per provider deferred (needs real keys) |
+| T15 | LLM client, keys, usage | A | in-progress | llm/ + tests green; review nits applied; real-call verification 7/7 canonical models (docs/log.md) |
 | T16 | Code extractor | A | todo | no dependencies |
 | T17 | System prompts | A | todo | after T14 |
 | T18 | Agent loop + budget | A | todo | critical path |
