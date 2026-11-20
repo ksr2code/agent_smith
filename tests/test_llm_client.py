@@ -388,6 +388,69 @@ def test_transport_error_backs_off_same_key(
     assert resp.retries == 1
 
 
+def test_transient_openrouter_400_retries_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: failing fast on a transient upstream 400 — the
+    # identical payload succeeds on retry, so it must back off on
+    # the same key instead of raising.
+    scripted = _Scripted()
+    scripted.add(400, {"error": {"message": "Provider returned error"}})
+    scripted.add(200, _reply())
+    client = _client(
+        scripted,
+        _models_a(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+    )
+    resp = client.generate(_MESSAGES, "zephyr")
+    assert resp.text == "hi"
+    assert resp.retries == 1
+    assert scripted.auths == ["Bearer sk-a1"] * 2  # same key
+    assert scripted.sleeps == [1.0]  # backoff_s, not pacing
+
+
+def test_real_400_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Discriminates: retrying a GENUINE payload error — a real 400
+    # must raise immediately with the provider's message, no sleeps,
+    # no second attempt.
+    scripted = _Scripted()
+    scripted.add(400, {"error": {"message": "invalid model"}})
+    client = _client(
+        scripted,
+        _models_a(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+    )
+    with pytest.raises(LLMError, match="invalid model"):
+        client.generate(_MESSAGES, "zephyr")
+    assert scripted.sleeps == []
+    assert len(scripted.auths) == 1
+
+
+def test_transient_openrouter_400_ladder_yields_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: an endless transient-400 stream wedging one key
+    # — the exponential ladder runs, the cap yields the key, and the
+    # ring's second key serves the success.
+    scripted = _Scripted()
+    for _ in range(6):
+        scripted.add(400, {"error": {"message": "Provider returned error"}})
+    scripted.add(200, _reply())
+    client = _client(
+        scripted,
+        _models_a(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+    )
+    resp = client.generate(_MESSAGES, "zephyr")
+    assert scripted.sleeps == [1.0, 2.0, 4.0, 8.0, 16.0]
+    assert scripted.auths == ["Bearer sk-a1"] * 6 + ["Bearer sk-a2"]
+    assert resp.text == "hi"
+    assert resp.retries == 6
+
+
 def test_persistent_server_errors_yield_the_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

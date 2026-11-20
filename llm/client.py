@@ -54,6 +54,9 @@ import httpx
 
 from llm.keys import KeyRing
 
+# The 110 s read keeps slow reasoning models alive — httpx's 5 s
+# default read timeout starves them (observed calls exceeding 90 s
+# on free tiers); the connect stage stays tight at 10 s.
 _TIMEOUT = httpx.Timeout(110.0, connect=10.0)
 _RATE_LIMIT = 429
 _AUTH_FAILURES = frozenset({401, 402, 403})
@@ -351,6 +354,25 @@ class LLMClient:
                     if exc.status >= 500:
                         last_rate_limited = False
                         last_failure = f"server error (HTTP {exc.status})"
+                        backoff_stage += 1
+                        if backoff_stage > _MAX_BACKOFF_RETRIES:
+                            ring.mark_exhausted(key)
+                            key = None
+                            backoff_stage = 0
+                            continue
+                        self._sleep(self._backoff_s * 2 ** (backoff_stage - 1))
+                        continue
+                    if exc.status == 400 and (
+                        exc.message == "Provider returned error"
+                    ):
+                        # OpenRouter :free endpoints transiently return
+                        # 400 "Provider returned error" for upstream
+                        # failures; identical payloads succeed on
+                        # retry — retry with backoff, capped like
+                        # 5xx. Any other 400 is a real request error
+                        # and fails fast.
+                        last_rate_limited = False
+                        last_failure = "transient provider error (HTTP 400)"
                         backoff_stage += 1
                         if backoff_stage > _MAX_BACKOFF_RETRIES:
                             ring.mark_exhausted(key)
