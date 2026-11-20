@@ -91,8 +91,8 @@ L ≈ two days):
 | T07 | Worker core + attribute policy (ADR-0005) | L | B | T06 |
 | T08 | SandboxProcess (parent side) | M | B | T07 |
 | T09 | Sandbox REPL CLI | S | B | T08 |
-| T10 | SWE-bench tools, local mode (ADR-0009) | L | A | T05 |
-| T11 | MBPP run_tests tool | S | A | T05 |
+| T10 | SWE-bench tools, local mode (ADR-0009) | L | B | T05 |
+| T11 | MBPP run_tests tool | S | B | T05 |
 | T12 | MCP client manager + stubs | L | A | T08, T10 |
 | T13 | Tool result formatting | S | A | T12 |
 | T14 | Dynamic sandbox manual | S | A | T12 |
@@ -115,9 +115,10 @@ L ≈ two days):
 | T31 | README.md | M | S | T29 |
 | T32 | Final checks + defense rehearsal | M | A | all |
 
-Parallel waves after T04: B runs T06→T07→T08→T09 while A runs
-T10/T11/T15/T16, then T12→T13→T14→T17; B may pull T22 forward
-right after T08 (Wave 2b) so Docker work overlaps A's client tasks.
+Parallel waves after T04: B runs T06→T07→T08→T09 then T10/T11,
+A runs T15/T16 (and may pick up T10/T11 per ADR-0013 if idle), then
+T12→T13→T14→T17; B may pull T22 forward right after T08 (Wave 2b)
+so Docker work overlaps A's client tasks.
 † T02 is the only **hard** dependency of T22 (the grader study); the
 "after T08" placement is pure scheduling for parallelism, not a
 prerequisite.

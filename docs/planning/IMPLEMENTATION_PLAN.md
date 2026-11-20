@@ -458,9 +458,10 @@ failure must not kill the REPL (banner to stderr).
 
 # Phase 2 — Tools + Client + LLM (parallel waves) — T10–T17
 
-**Wave 2a [AGT]:** T10, T11, T15, T16. **Wave 2b [SYS]** (after T08):
-T22. **Wave 3 [AGT]:** T12–T14 (needs T08 + one server). **T17**
-after T14.
+**Wave 2a [AGT]:** T15, T16 (A may pick up T10/T11 per ADR-0013 if
+idle). **Wave 2b [SYS]:** T10, T11 alongside/after T06–T09; T22
+after T08. **Wave 3 [AGT]:** T12–T14 (needs T08 + one server).
+**T17** after T14.
 
 ### T10 [AGT]: `mcp_tools_swebench.py` — the nine tools, local mode
 
