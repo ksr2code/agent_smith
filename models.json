@@ -1,15 +1,9 @@
 {
   "models": [
     {
-      "canonical": "qwen3-235b",
+      "canonical": "gpt-oss-120b",
       "providers": {
-        "openrouter": "qwen/qwen3-235b-a22b-2507"
-      }
-    },
-    {
-      "canonical": "deepseek-v3",
-      "providers": {
-        "openrouter": "deepseek/deepseek-chat"
+        "groq": "openai/gpt-oss-120b"
       }
     },
     {

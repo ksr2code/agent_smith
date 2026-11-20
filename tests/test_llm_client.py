@@ -461,11 +461,10 @@ def test_root_models_json_schema_is_loadable(
         "google",
         "nvidia",
     }
-    assert client._providers[0].models["qwen3-235b"] == (
-        "qwen/qwen3-235b-a22b-2507"
-    )
+    groq = next(p for p in client._providers if p.name == "groq")
+    assert groq.models["gpt-oss-120b"] == "openai/gpt-oss-120b"
     with pytest.raises(LLMError, match="no API keys resolved"):
-        client.generate(_MESSAGES, "qwen3-235b")
+        client.generate(_MESSAGES, "gpt-oss-120b")
 
 
 def test_root_models_json_limits_are_subject_contract() -> None:

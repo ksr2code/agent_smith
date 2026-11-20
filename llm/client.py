@@ -15,15 +15,15 @@ OpenAI-compatible BASE url; the chat endpoint is
     {
       "providers": [                        # declared endpoints
         {
-          "name": "openrouter",
-          "api_url": "https://openrouter.ai/api/v1",
-          "keys_env": ["OPENROUTER_API_KEY", "OPENROUTER_API_KEY_2"]
+          "name": "groq",
+          "api_url": "https://api.groq.com/openai/v1",
+          "keys_env": ["GROQ_API_KEY", "GROQ_API_KEY_2"]
         }
       ],
       "models": [                           # canonical -> alias per provider
         {
-          "canonical": "qwen3-235b",
-          "providers": {"openrouter": "qwen/qwen3-235b-a22b-2507"}
+          "canonical": "gpt-oss-120b",
+          "providers": {"groq": "openai/gpt-oss-120b"}
         }
       ],
       "limits": {...}                       # pass-through (T18+ reads)

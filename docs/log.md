@@ -14,6 +14,12 @@ models expected: they spend the whole budget on hidden thinking.
 |---|---|---|---|---|---|---|
 | qwen3-235b | openrouter (qwen/qwen3-235b-a22b-2507) | 13/2 | no | stop | 0.84 s | ok |
 | deepseek-v3 | openrouter (deepseek/deepseek-chat) | 8/2 | no | stop | 0.85 s | ok |
+
+Both rows above are PAID models, kept for the historical record:
+on 2026-11-20 they were replaced after the subject §V.6.1 free-only
+rule was caught — qwen3-235b → gpt-oss-120b@groq; deepseek-v3 →
+particle-1@openrouter:free (that alias verified 429 twice on the
+shared free pool; slot held open, no substitution invented).
 | nemotron-3.5-lightning | openrouter (nvidia/nemotron-3.5-lightning:free) | 21/8 | no | length | 0.57 s | DIVERGENCE: 8 tokens reported, empty visible text (hidden reasoning) |
 | qwen3.8-27b | groq (qwen/qwen3.8-27b) | 17/2 | no | stop | 0.10 s | ok |
 | gemini-3.5-flash-lite | google (gemini-3.5-flash-lite) | 6/1 | no | stop | 7.05 s | ok |
@@ -61,3 +67,31 @@ id itself is live-catalog-verified (it appears in OpenRouter's
 `:free` listing); the earlier nvidia primary call succeeded (71 s).
 Re-run the two tiny calls when the pool reopens to complete the
 verification rows.
+
+### 2026-11-20 — free-tier-only correction (subject §V.6.1)
+
+The subject mandates exclusively free-tier models (no paid plans,
+credits, or billing-enabled accounts). The two paid canonicals were
+removed from `models.json`: qwen3-235b → replaced by
+`gpt-oss-120b`@groq (owner-approved; live Groq catalog verified);
+deepseek-v3 → removal only, `particle-1`@openrouter:free is the
+intended replacement but its verification 429'd twice on the shared
+free pool, so the slot stays empty (no substitution invented).
+
+Verification of the new primary path (tiny call, same recipe):
+
+| canonical | provider (alias) | in/out tokens | est. | finish | latency | sanity |
+|---|---|---|---|---|---|---|
+| gpt-oss-120b | groq (openai/gpt-oss-120b) | 76/8 | no | length | 0.15 s | DIVERGENCE: 8 tokens reported, empty visible text (hidden reasoning at max_tokens=8) |
+| particle-1 | openrouter (particle-ai/particle-1:free) | — | — | — | — | FAILED: HTTP 429 "Provider returned error" (second consecutive day; slot held open) |
+
+Compliance notes: the roster is now exclusively free-tier — groq
+(gpt-oss-120b, qwen3.8-27b: 30 RPM / 1K RPD / 8K TPM / 200K TPD per
+model on the free plan), google (gemini flash tiers, free tier
+exists), openrouter `:free` entries only (nemotron primary, gemma
+backup — one shared daily pool across them and a future particle-1).
+nvidia stays gemma primary by owner decision, with the known
+signup-credit caveat (NVIDIA NIM onboarding credits — not a paid
+plan) and the 71 s cold latency observed earlier. The remaining
+open item is the particle-1 slot: retry the tiny call when the
+OpenRouter daily pool resets and add the canonical only on success.
