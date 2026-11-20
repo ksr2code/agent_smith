@@ -6,20 +6,27 @@ provider we target speaks; providers differ only in endpoint, key
 environment variables, and model naming. ``models_json`` maps our
 CANONICAL model names to per-provider aliases so a fallback switch
 never changes ``LLMResponse.model_name`` mid-run (the grader warns
-on multiple model names per run).
+on multiple model names per run). ``api_url`` is the provider's
+OpenAI-compatible BASE url; the chat endpoint is
+``{api_url}/chat/completions``.
 
-``models_json`` schema (this becomes the root ``models.json``)::
+``models_json`` schema (this IS the root ``models.json``)::
 
     {
-      "providers": [                       # ordered = fallback order
+      "providers": [                        # ordered = fallback order
         {
           "name": "openrouter",
-          "api_url": "https://host/api/v1/chat/completions",
-          "api_key_env": ["KEY_ENV_NAME_1", "KEY_ENV_NAME_2"],
-          "models": {"zephyr": "vendor/model:free"}  # canonical->alias
+          "api_url": "https://openrouter.ai/api/v1",
+          "keys_env": ["OPENROUTER_API_KEY", "OPENROUTER_API_KEY_2"]
         }
       ],
-      "limits": {...}                      # pass-through (T18+ reads)
+      "models": [                           # canonical -> alias per provider
+        {
+          "canonical": "qwen3-235b",
+          "providers": {"openrouter": "qwen/qwen3-235b-a22b-2507"}
+        }
+      ],
+      "limits": {...}                       # pass-through (T18+ reads)
     }
 
 Key values are resolved from the environment at construction; a
@@ -92,7 +99,7 @@ class LLMResponse:
 class _Provider:
     name: str
     api_url: str
-    models: Mapping[str, str]
+    models: dict[str, str]
     ring: KeyRing
 
 
@@ -182,18 +189,18 @@ class LLMClient:
         raw_providers = data.get("providers")
         if not isinstance(raw_providers, list):
             raise LLMError("models_json: 'providers' must be a list")
+        by_name: dict[str, _Provider] = {}
         providers: list[_Provider] = []
         for item in raw_providers:
             if not isinstance(item, dict):
                 raise LLMError("models_json: provider entries must be objects")
             name = item.get("name")
             api_url = item.get("api_url")
-            env_names = item.get("api_key_env", [])
-            models = item.get("models", {})
+            env_names = item.get("keys_env", [])
             if not isinstance(name, str) or not isinstance(api_url, str):
                 raise LLMError("models_json: provider needs name + api_url")
-            if not isinstance(env_names, list) or not isinstance(models, dict):
-                raise LLMError("models_json: bad api_key_env/models types")
+            if not isinstance(env_names, list):
+                raise LLMError("models_json: bad keys_env type")
             keys = [
                 key
                 for env_name in env_names
@@ -218,14 +225,31 @@ class LLMClient:
                     f"check env vars: {', '.join(unset)}",
                     stacklevel=2,
                 )
-            providers.append(
-                _Provider(
-                    name=name,
-                    api_url=api_url,
-                    models=dict(models),
-                    ring=KeyRing(keys),
-                )
+            provider = _Provider(
+                name=name, api_url=api_url, models={}, ring=KeyRing(keys)
             )
+            by_name[name] = provider
+            providers.append(provider)
+        raw_models = data.get("models", [])
+        if not isinstance(raw_models, list):
+            raise LLMError("models_json: 'models' must be a list")
+        for entry in raw_models:
+            if not isinstance(entry, dict):
+                raise LLMError("models_json: model entries must be objects")
+            canonical = entry.get("canonical")
+            mapping = entry.get("providers", {})
+            if not isinstance(canonical, str) or not isinstance(mapping, dict):
+                raise LLMError(
+                    "models_json: model needs canonical + providers"
+                )
+            for provider_name, alias in mapping.items():
+                target = by_name.get(provider_name)
+                if target is None or not isinstance(alias, str):
+                    raise LLMError(
+                        f"models_json: model '{canonical}' names unknown "
+                        f"provider '{provider_name}'"
+                    )
+                target.models[canonical] = alias
         return providers
 
     def generate(
@@ -422,9 +446,10 @@ class LLMClient:
         if max_tokens is not None:
             body["max_tokens"] = max_tokens
         self._request_count += 1
+        endpoint = provider.api_url.rstrip("/") + "/chat/completions"
         try:
             response = self._http.post(
-                provider.api_url,
+                endpoint,
                 json=body,
                 headers={"Authorization": f"Bearer {key}"},
                 timeout=self.timeout,

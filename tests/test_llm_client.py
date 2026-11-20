@@ -14,8 +14,8 @@ import pytest
 
 from llm import KeyRing, LLMClient, LLMError, sanity_check_usage
 
-_A_URL = "https://a.example/v1/chat/completions"
-_B_URL = "https://b.example/v1/chat/completions"
+_A_URL = "https://a.example/v1"
+_B_URL = "https://b.example/v1"
 
 
 def _models_ab() -> dict:
@@ -25,15 +25,22 @@ def _models_ab() -> dict:
             {
                 "name": "prov_a",
                 "api_url": _A_URL,
-                "api_key_env": ["T15_KEY_A1", "T15_KEY_A2"],
-                "models": {"zephyr": "a/zephyr-free"},
+                "keys_env": ["T15_KEY_A1", "T15_KEY_A2"],
             },
             {
                 "name": "prov_b",
                 "api_url": _B_URL,
-                "api_key_env": ["T15_KEY_B1", "T15_KEY_B2"],
-                "models": {"zephyr": "b/zephyr-free"},
+                "keys_env": ["T15_KEY_B1", "T15_KEY_B2"],
             },
+        ],
+        "models": [
+            {
+                "canonical": "zephyr",
+                "providers": {
+                    "prov_a": "a/zephyr-free",
+                    "prov_b": "b/zephyr-free",
+                },
+            }
         ],
         "limits": {"mbpp": {"max_iterations": 10}},
     }
@@ -46,9 +53,11 @@ def _models_a() -> dict:
             {
                 "name": "prov_a",
                 "api_url": _A_URL,
-                "api_key_env": ["T15_KEY_A1", "T15_KEY_A2"],
-                "models": {"zephyr": "a/zephyr-free"},
+                "keys_env": ["T15_KEY_A1", "T15_KEY_A2"],
             }
+        ],
+        "models": [
+            {"canonical": "zephyr", "providers": {"prov_a": "a/zephyr-free"}}
         ],
         "limits": {},
     }
@@ -142,6 +151,31 @@ class _FakeClock:
 
 
 _MESSAGES = [{"role": "user", "content": "hello"}]
+
+
+def test_chat_endpoint_is_base_plus_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: posting to the base url — provider api_url is
+    # the OpenAI-compatible BASE; the chat endpoint must be
+    # {base}/chat/completions (groq 404s with 'POST /openai/v1'
+    # otherwise).
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(200, json=_reply())
+
+    scripted = _Scripted()
+    scripted.handler = handler  # type: ignore[method-assign]
+    client = _client(
+        scripted,
+        _models_ab(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+    )
+    client.generate(_MESSAGES, "zephyr")
+    assert seen == ["/v1/chat/completions"]
 
 
 def test_success_parse(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -407,6 +441,31 @@ def test_malformed_choices_payload_raises_llm_error(
     )
     with pytest.raises(LLMError, match="malformed"):
         client.generate(_MESSAGES, "zephyr")
+
+
+def test_root_models_json_schema_is_loadable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # Discriminates: a malformed root models.json breaking startup —
+    # the real config file must parse into providers and alias maps.
+    # chdir away from any developer .env so keys are genuinely
+    # unresolved (deterministic zero-key warnings + error path).
+    monkeypatch.chdir(tmp_path)
+    root_config = Path(__file__).resolve().parent.parent / "models.json"
+    with pytest.warns(UserWarning):
+        client = LLMClient(root_config, sleep=lambda _s: None)
+    assert set(client.rings) == {
+        "openrouter",
+        "groq",
+        "google",
+        "nvidia",
+    }
+    assert client._providers[0].models["qwen3-235b"] == (
+        "qwen/qwen3-235b-a22b-2507"
+    )
+    with pytest.raises(LLMError, match="no API keys resolved"):
+        client.generate(_MESSAGES, "qwen3-235b")
 
 
 def test_models_json_loaded_from_file_path(
