@@ -468,6 +468,29 @@ def test_root_models_json_schema_is_loadable(
         client.generate(_MESSAGES, "qwen3-235b")
 
 
+def test_root_models_json_limits_are_subject_contract() -> None:
+    # Discriminates: placeholder or tuning values drifting into the
+    # limits block — these are the subject's contract numbers, read
+    # verbatim by T18/T19, so the blocks are pinned field-exact
+    # (an extra or missing key breaks the equality either way).
+    config = json.loads(
+        (Path(__file__).resolve().parent.parent / "models.json")
+        .read_text(encoding="utf-8")
+    )
+    assert config["limits"]["mbpp"] == {
+        "max_iterations": 10,
+        "max_input_tokens": 6000,
+        "max_output_tokens": 1500,
+        "max_time_seconds": 120.0,
+    }
+    assert config["limits"]["swebench"] == {
+        "max_iterations": 30,
+        "max_input_tokens": 300000,
+        "max_output_tokens": 10000,
+        "max_time_seconds": 900.0,
+    }
+
+
 def test_models_json_loaded_from_file_path(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
