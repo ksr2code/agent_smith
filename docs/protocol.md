@@ -1,6 +1,6 @@
 # Agent Smith — Worker Protocol & A/B Interface Contract
 
-Status: **Proposed** (v1.1) — pending joint ratification via PR review.
+Status: **Ratified** (v1.1) — approved by both members in the PR #2 review, merged 2026-11-16.
 Lineage: reconciles two drafts — the T04 worker-protocol draft (this
 branch) and the A/B Working Agreement proposal (`docs/ab-interface-protocol`,
 commit `7a7f8a7`). Naming conventions, the typed shared contracts and
