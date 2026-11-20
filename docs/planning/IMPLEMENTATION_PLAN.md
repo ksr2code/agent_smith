@@ -229,7 +229,7 @@ recomputes; keep it in one place so it can never drift.
 
 `docs/protocol.md` — JSON lines on worker stdin/stdout: init (config +
 tools) / ready / exec / streamed stdout / tool_call ↔ tool_result
-(correlated by `call` id) / result / shutdown. Wire statuses:
+(correlated by `exec_id` + `call_id`) / result / shutdown. Wire statuses:
 `ok | error | final | keyboard_interrupt | system_exit`; the parent
 derives `timeout` (deadline expired) and `killed` (worker died).
 Rules: the worker prints only protocol lines (its own logs → stderr);
@@ -397,6 +397,10 @@ exec → swap in a stdout `_Tee` (accumulate + stream events) → pipeline
 (`ast.parse → scan → rewrite → fix_missing_locations → compile →
 exec`) → cap stdout at 10 000 with a `[truncated N chars]` note →
 slot check (slot set ⇒ status `final`) → result.
+- **`contracts.py`** (repository root, neutral module per protocol
+  §1) is created here: `ToolInfo`, `ToolArguments`, `ToolReply`,
+  `ToolDispatcher`, `derive_python_name` — imported by both halves;
+  `models.py` stays frozen.
 - [ ] Battery green on macOS and Linux. Regression: ~20 reference
       solutions from train/fewshot splits (local sandbox-regression
       use only — never shown to the agent) + dunder-idiom snippets.
@@ -415,11 +419,11 @@ class ExecutionResult:
     stdout: str; error: str | None; final_answer: str | None
 
 class SandboxProcess:
-    def __init__(self, cfg, tools=None, tool_dispatch=None): ...
+    def __init__(self, cfg, tools, tool_dispatch): ...
     def start(self) -> None      # Popen [sys.executable, -m sandbox.worker],
                                  # start_new_session=True (own process group),
                                  # stderr=DEVNULL (protocol channel purity)
-    def execute(self, code: str) -> ExecutionResult
+    def execute(self, code: str, *, task_deadline: float) -> ExecutionResult
     def shutdown(self) -> None
 ```
 `execute` semantics: reader-thread queue; `base_deadline = now +
@@ -431,7 +435,13 @@ SIGKILL), restart, status `timeout` with the partial stdout and
 `keyboard_interrupt`/`system_exit` re-raise in the parent; transparent
 restart if the worker died between execs; stale exec-id messages
 dropped; tool dispatch through the injected callback (never raises —
-errors become `[TOOL ERROR]` observations).
+errors become `[TOOL ERROR]` observations). `task_deadline` is an
+absolute `time.monotonic()` value from A (already minus A's reserve);
+reject it if expired before executing; expiry mid-entry → status
+`timeout` with a task-deadline diagnostic and the loop ENDS the task
+(unlike a per-exec timeout, which permits another iteration);
+internally the per-exec limit (timeout + 5 s grace) stays, suspended
+and extended during tool calls (protocol §3).
 
 - [ ] Failing tests, each with its discrimination comment: timeout
       returns partial stdout + restart; KI/SystemExit re-raised;
@@ -519,8 +529,13 @@ every public method = `run_coroutine_threadsafe(...).result(timeout)`.
 every var matching `*API_KEY*`** (tools never see provider keys);
 `python`/`python3` → `sys.executable`. `connect_http(url)`: on
 failure, retry once with `/mcp` appended. `list_tools()` →
-`ToolInfo(name, description, params)` where params = the JSON-schema
-property keys IN SERVER ORDER; `list_resources`/`list_prompts`
+`ToolInfo(name, python_name, description, input_schema,
+parameter_order)` (protocol §1): `input_schema` = the server's full
+JSON schema, `parameter_order` = property keys in server order;
+`python_name` comes from the shared `derive_python_name` in
+`contracts.py` (identifier rules incl. the degenerate `tool_` prefix;
+a tool named `final_answer` becomes `mcp_final_answer`);
+`list_resources`/`list_prompts`
 best-effort (unknown servers may not implement them). `call_tool`:
 timeout enforced twice (asyncio.wait_for inside, +5 s outside) — no
 hang from either side. `close()` idempotent, never raises.
@@ -664,7 +679,11 @@ of max (the NEXT call must fit); time ≥ max − reserve (kills, not
 checks). Reason strings prefixed `Budget exhausted: …` downstream.
 `AgentLoop(llm, sbx, manual, limits, model, final_validator=None).run(
 task_prompt, benchmark, task_id) -> SolutionOutput` — **never
-raises**. Per step, in order: verdict; compute the step output cap
+raises**. The loop computes `task_deadline = time.monotonic() +
+budget.max_time_seconds − budget.reserve_seconds` once per task and
+passes it to every `sbx.execute`; a task-deadline `timeout` ends the
+task (protocol §3). Per step, in order: verdict; compute the step
+output cap
 `min(700, max(100, 90%_cap − consumed))` (no single call can consume
 the whole budget; the floor keeps the model able to answer); call with
 `stop=["\nObservation:"]` (observations are authored by the system);
@@ -703,7 +722,7 @@ Flow: load + type-guard the task; limits from `models.json`
 (subject defaults as fallback); load sandbox config; start
 `mcp_tools_mbpp.py` over stdio via an ABSOLUTE script path (works
 from any cwd); `_dispatch = call_tool → format_tool_result`;
-generate manual; `SandboxProcess(tools, tool_dispatch)`; **wire the
+generate manual; `SandboxProcess(cfg, tools, tool_dispatch)`; **wire the
 final-check gate: re-run the task's public tests against the exact
 submitted code inside the sandbox — status ok ⇔ submission accepted**;
 task prompt = definition + signature + public tests + imports (plain,
