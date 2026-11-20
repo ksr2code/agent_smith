@@ -43,7 +43,7 @@ under "Milestones and gates" — that section stays authoritative.)
 | T12 | MCP client manager + stubs | A | todo | needs T08 + one server |
 | T13 | Tool result formatting | A | todo | — |
 | T14 | Dynamic sandbox manual | A | todo | — |
-| T15 | LLM client, keys, usage | A | todo | — |
+| T15 | LLM client, keys, usage | A | in-progress | free-only roster per subject V.6.1: 6 canonicals (gpt-oss-120b, nemotron-3.5-lightning, qwen3.8-27b, gemini-3.5-flash, gemini-3.5-flash-lite, gemma-4-31b-it) — all with a live-verified primary; particle-1 slot empty (429 x2, shared pool); real-call log docs/log.md |
 | T16 | Code extractor | A | todo | no dependencies |
 | T17 | System prompts | A | todo | after T14 |
 | T18 | Agent loop + budget | A | todo | critical path |
