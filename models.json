@@ -40,7 +40,8 @@
     {
       "canonical": "gemma-4-31b-it",
       "providers": {
-        "nvidia": "google/gemma-4-31b-it"
+        "nvidia": "google/gemma-4-31b-it",
+        "openrouter": "google/gemma-4-31b-it:free"
       }
     }
   ],

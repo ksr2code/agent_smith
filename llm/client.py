@@ -13,7 +13,7 @@ OpenAI-compatible BASE url; the chat endpoint is
 ``models_json`` schema (this IS the root ``models.json``)::
 
     {
-      "providers": [                        # ordered = fallback order
+      "providers": [                        # declared endpoints
         {
           "name": "openrouter",
           "api_url": "https://openrouter.ai/api/v1",
@@ -28,6 +28,11 @@ OpenAI-compatible BASE url; the chat endpoint is
       ],
       "limits": {...}                       # pass-through (T18+ reads)
     }
+
+For each canonical model, providers are tried in the order listed in
+that model's ``providers`` object: the first is primary, the rest
+are fallbacks — a provider's position in the top-level
+``providers`` list does not set per-model precedence.
 
 Key values are resolved from the environment at construction; a
 ``.env`` file in the working directory is parsed with the standard
@@ -164,12 +169,16 @@ class LLMClient:
         self._last_request_at: float | None = None
         self._env_file_values: dict[str, str] = {}
         self._unresolved_env: dict[str, list[str]] = {}
+        self._model_providers: dict[str, list[str]] = {}
         env_file = Path.cwd() / ".env"
         if env_file.is_file():
             self._env_file_values = _parse_env_file(env_file)
         self._providers = self._build_providers(models_json)
         self.rings: dict[str, KeyRing] = {
             provider.name: provider.ring for provider in self._providers
+        }
+        self._providers_by_name: dict[str, _Provider] = {
+            provider.name: provider for provider in self._providers
         }
 
     def _resolve_key(self, env_name: str) -> str | None:
@@ -250,7 +259,19 @@ class LLMClient:
                         f"provider '{provider_name}'"
                     )
                 target.models[canonical] = alias
+            # Per-model fallback order = the entry's own providers
+            # insertion order (first = primary, rest = fallbacks).
+            self._model_providers[canonical] = list(mapping.keys())
         return providers
+
+    def _chain_for(self, model: str) -> list[_Provider]:
+        """Providers serving ``model``, in the model entry's order."""
+        by_name = self._providers_by_name
+        return [
+            by_name[name]
+            for name in self._model_providers.get(model, [])
+            if name in by_name
+        ]
 
     def generate(
         self,
@@ -264,7 +285,7 @@ class LLMClient:
         ``model`` is the canonical name; the provider-specific alias
         is chosen per endpoint and never surfaces in the response.
         """
-        chain = [p for p in self._providers if model in p.models]
+        chain = self._chain_for(model)
         if not chain:
             raise LLMError(f"no provider serves model '{model}'")
         # Rate windows are per-minute: reopen rate-limited keys once

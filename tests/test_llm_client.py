@@ -474,8 +474,9 @@ def test_root_models_json_limits_are_subject_contract() -> None:
     # verbatim by T18/T19, so the blocks are pinned field-exact
     # (an extra or missing key breaks the equality either way).
     config = json.loads(
-        (Path(__file__).resolve().parent.parent / "models.json")
-        .read_text(encoding="utf-8")
+        (Path(__file__).resolve().parent.parent / "models.json").read_text(
+            encoding="utf-8"
+        )
     )
     assert config["limits"]["mbpp"] == {
         "max_iterations": 10,
@@ -653,6 +654,65 @@ def test_pacing_sleeps_only_the_remainder(
     clock.advance(100.0)  # far apart — window fully elapsed
     client.generate(_MESSAGES, "zephyr")
     assert scripted.sleeps == [3.0]  # no further sleep
+
+
+def test_model_entry_order_sets_primary_and_backup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: chain order taken from the top-level providers
+    # list instead of the model entry's own providers mapping — the
+    # owner declares per model which provider is primary (listed
+    # first), even when the providers list names it later. The 429
+    # exhausts the primary; the backup must serve the fallback.
+    models = {
+        "providers": [
+            {
+                "name": "backup_first",
+                "api_url": _B_URL,
+                "keys_env": ["T15_KEY_B1", "T15_KEY_B2"],
+            },
+            {
+                "name": "primary_later",
+                "api_url": _A_URL,
+                "keys_env": ["T15_KEY_A1", "T15_KEY_A2"],
+            },
+        ],
+        "models": [
+            {
+                "canonical": "zephyr",
+                "providers": {
+                    "primary_later": "a/zephyr-free",
+                    "backup_first": "b/zephyr-free",
+                },
+            }
+        ],
+        "limits": {},
+    }
+    scripted = _Scripted()
+    scripted.add(429, {"error": {"message": "rate limited"}})
+    scripted.add(429, {"error": {"message": "rate limited"}})
+    scripted.add(200, _reply())
+    client = _client(
+        scripted,
+        models,
+        monkeypatch,
+        {
+            "T15_KEY_A1": "sk-a1",
+            "T15_KEY_A2": "sk-a2",
+            "T15_KEY_B1": "sk-b1",
+            "T15_KEY_B2": "sk-b2",
+        },
+    )
+    resp = client.generate(_MESSAGES, "zephyr")
+    # Both primary keys 429 (primary_later is exhausted) before the
+    # backup provider serves the fallback.
+    assert scripted.auths == [
+        "Bearer sk-a1",
+        "Bearer sk-a2",
+        "Bearer sk-b1",
+    ]
+    assert resp.api_url == _B_URL
+    assert resp.model_name == "zephyr"
 
 
 def test_zero_key_provider_warns_and_error_names_it(

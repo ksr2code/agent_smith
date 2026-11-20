@@ -36,3 +36,28 @@ Notes:
   (nearest: cohere/command-a family) and no usable MISTRAL key is
   set. No substitutions invented; revisit when the owner updates
   the catalog or adds the key.
+
+### 2026-11-20 — gemma free backup + per-model ordering
+
+Owner decisions: per-model provider order in `models.json` is now
+the contract (first listed = primary, rest = fallbacks; pinned by
+`test_model_entry_order_sets_primary_and_backup`), and
+`gemma-4-31b-it` gained `openrouter (google/gemma-4-31b-it:free)`
+as its SECOND provider — nvidia stays primary. Verification of the
+two new `:free` aliases (tiny calls, same recipe) hit the shared
+quota pool:
+
+| canonical | provider (alias) | in/out tokens | est. | finish | latency | sanity |
+|---|---|---|---|---|---|---|
+| particle-1 | openrouter (particle-ai/particle-1:free) | — | — | — | — | FAILED: HTTP 429 "Provider returned error" (free pool) — NOT added to models.json pending owner re-verification |
+| gemma-4-31b-it | openrouter (google/gemma-4-31b-it:free) | — | — | — | — | FAILED: HTTP 429 "Provider returned error" (free pool) — backup added anyway per owner decision |
+
+Caveat: OpenRouter's `:free` models share one daily quota pool per
+key, so `gemma-4-31b-it:free` is backup-only and `nemotron-3.5-lightning:free`
+(and a future `particle-1:free`) draw from that same daily quota —
+a dry pool takes all of them down together, which is exactly why
+the free variant must never be the primary path. The gemma `:free`
+id itself is live-catalog-verified (it appears in OpenRouter's
+`:free` listing); the earlier nvidia primary call succeeded (71 s).
+Re-run the two tiny calls when the pool reopens to complete the
+verification rows.
