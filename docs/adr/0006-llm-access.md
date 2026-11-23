@@ -71,6 +71,15 @@ model, and always reports `model_name` as the canonical name.
   literal 0 — is reported verbatim, so genuine under-reporting
   stays visible to `sanity_check_usage`.
 
+- Deadline contract: `generate(..., deadline=...)` takes an
+  absolute `time.monotonic()` timestamp (the caller computes the
+  task deadline once per task and passes it to every call). While
+  time remains, waits and each attempt's HTTP timeout are capped to
+  the remainder; at expiry no new attempt starts and the call
+  raises `LLMDeadlineExceeded` (an `LLMError`) — budget death is
+  distinguishable from provider exhaustion. `None` keeps the
+  unbounded default behavior.
+
 - Pacing is wall-clock-aware: the client records when each request
   completed and at call entry sleeps only the remainder of the
   interval — a call long after the previous one sleeps nothing.

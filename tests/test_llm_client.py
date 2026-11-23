@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from llm import KeyRing, LLMClient, LLMError, sanity_check_usage
+from llm.client import LLMDeadlineExceeded
 
 _A_URL = "https://a.example/v1"
 _B_URL = "https://b.example/v1"
@@ -837,6 +838,186 @@ def test_pacing_sleeps_only_the_remainder(
     clock.advance(100.0)  # far apart — window fully elapsed
     client.generate(_MESSAGES, "zephyr")
     assert scripted.sleeps == [3.0]  # no further sleep
+
+
+def test_past_deadline_raises_before_any_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: a call starting after the budget already ran out
+    # firing HTTP anyway — the pre-attempt check must refuse before
+    # the first request, with zero transport calls, and stay in the
+    # LLMError family callers already handle.
+    scripted = _Scripted()
+    scripted.add(200, _reply())  # must never be consumed
+    clock = _FakeClock()
+    client = _client(
+        scripted,
+        _models_ab(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+        clock=clock,
+    )
+    with pytest.raises(LLMDeadlineExceeded) as excinfo:
+        client.generate(_MESSAGES, "zephyr", deadline=clock.now - 10.0)
+    assert isinstance(excinfo.value, LLMError)
+    assert "zephyr" in str(excinfo.value)  # model named for the caller
+    assert scripted.auths == []  # no HTTP at all
+
+
+def test_entry_pacing_sleep_capped_to_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: the entry pacing sleep ignoring a deadline — a
+    # 4 s pace against a 1.5 s remainder must sleep 1.5 s, not blow
+    # the budget before the call's first request.
+    scripted = _Scripted()
+    clock = _FakeClock()
+    scripted.add(200, _reply())
+    scripted.add(200, _reply())
+    client = _client(
+        scripted,
+        _models_ab(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+        clock=clock,
+    )
+    client.generate(_MESSAGES, "zephyr", deadline=None)  # default form
+    client.generate(_MESSAGES, "zephyr", deadline=clock.now + 1.5)
+    assert scripted.sleeps == [1.5]  # min(4.0 interval, 1.5 remaining)
+
+
+def test_entry_pacing_past_deadline_raises_before_sleeping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: sleeping the full pacing interval after the
+    # budget expired — remaining <= 0 must raise before any sleep.
+    scripted = _Scripted()
+    clock = _FakeClock()
+    scripted.add(200, _reply())
+    scripted.add(200, _reply())  # must never be consumed
+    client = _client(
+        scripted,
+        _models_ab(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+        clock=clock,
+    )
+    client.generate(_MESSAGES, "zephyr")
+    with pytest.raises(LLMDeadlineExceeded):
+        client.generate(_MESSAGES, "zephyr", deadline=clock.now - 1.0)
+    assert scripted.sleeps == []  # raised before sleeping
+
+
+def test_backoff_sleep_capped_to_deadline_remaining(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: a 5xx backoff step sleeping its full ladder
+    # value past the deadline — the wait must cap to the remainder.
+    scripted = _Scripted()
+    clock = _FakeClock()
+    scripted.add(500, {"error": {"message": "overloaded"}})
+    scripted.add(200, _reply())
+    client = _client(
+        scripted,
+        _models_a(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+        clock=clock,
+    )
+    resp = client.generate(_MESSAGES, "zephyr", deadline=clock.now + 0.5)
+    assert scripted.sleeps == [0.5]  # min(1.0 ladder, 0.5 remaining)
+    assert resp.retries == 1
+
+
+def test_reset_retry_capped_and_refused_at_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: the last-provider reset path — its wait caps to
+    # the remaining budget and its final pre-attempt check refuses
+    # the request once that budget is gone (the capped sleep itself
+    # can be what exhausts it, so the check is not redundant).
+    scripted = _Scripted()
+    clock = _FakeClock()
+    for _ in range(3):
+        scripted.add(429, {"error": {"message": "rate limited"}})
+    monkeypatch.setenv("T15_KEY_A1", "sk-a1")
+    monkeypatch.setenv("T15_KEY_A2", "sk-a2")
+
+    def sleep_and_advance(seconds: float) -> None:
+        scripted.sleeps.append(seconds)
+        clock.advance(seconds)  # the wait elapses into the deadline
+
+    client = LLMClient(
+        _models_a(),
+        transport=httpx.MockTransport(scripted.handler),
+        sleep=sleep_and_advance,
+        clock=clock,
+    )
+    with pytest.raises(LLMDeadlineExceeded):
+        client.generate(_MESSAGES, "zephyr", deadline=clock.now + 0.5)
+    assert scripted.sleeps == [0.5]  # min(1.0 reset wait, 0.5 left)
+    assert len(scripted.auths) == 2  # reset attempt never fired
+
+
+def test_readtimeout_at_deadline_raises_deadline_exceeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: the in-flight capped request dying with a
+    # ReadTimeout exactly at the deadline and the ladder retrying —
+    # the next decision point must convert the transport error into
+    # LLMDeadlineExceeded instead of looping, and the wait between
+    # must never go negative (real time.sleep would raise).
+    scripted = _Scripted()
+    clock = _FakeClock()
+    reads = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal reads
+        reads += 1
+        clock.advance(120.0)  # the blocked read eats the whole budget
+        raise httpx.ReadTimeout("read timed out")
+
+    scripted.handler = handler  # type: ignore[method-assign]
+    client = _client(
+        scripted,
+        _models_a(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+        clock=clock,
+    )
+    with pytest.raises(LLMDeadlineExceeded) as excinfo:
+        client.generate(_MESSAGES, "zephyr", deadline=clock.now + 110.0)
+    assert isinstance(excinfo.value, LLMError)
+    assert "transport error" in str(excinfo.value)  # honest last cause
+    assert reads == 1  # one blocked read, no retry loop
+    assert scripted.sleeps == [0.0]  # capped at the floor, not < 0
+
+
+def test_attempt_timeout_helper_math(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: the per-attempt timeout ignoring the deadline —
+    # it must be the standing 110/10 config when no deadline is set,
+    # and min(config stage, remaining) per stage when one is.
+    scripted = _Scripted()
+    clock = _FakeClock()
+    client = _client(
+        scripted,
+        _models_ab(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+        clock=clock,
+    )
+    assert client._attempt_timeout(None) is client.timeout
+    capped = client._attempt_timeout(clock.now + 30.0)
+    assert capped.read == 30.0  # min(110.0, remaining)
+    assert capped.connect == 10.0  # min(10.0, remaining)
+    tight = client._attempt_timeout(clock.now + 5.0)
+    assert tight.read == 5.0
+    assert tight.connect == 5.0
+    spent = client._attempt_timeout(clock.now)
+    assert spent.read == 0.0
+    assert spent.connect == 0.0
 
 
 def test_model_entry_order_sets_primary_and_backup(

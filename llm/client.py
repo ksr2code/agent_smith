@@ -67,7 +67,9 @@ from llm.keys import KeyRing
 # The 110 s read keeps slow reasoning models alive — httpx's 5 s
 # default read timeout starves them (observed calls exceeding 90 s
 # on free tiers); the connect stage stays tight at 10 s.
-_TIMEOUT = httpx.Timeout(110.0, connect=10.0)
+_READ_TIMEOUT_S = 110.0
+_CONNECT_TIMEOUT_S = 10.0
+_TIMEOUT = httpx.Timeout(_READ_TIMEOUT_S, connect=_CONNECT_TIMEOUT_S)
 _RATE_LIMIT = 429
 _AUTH_FAILURES = frozenset({401, 402, 403})
 # A provider failing this many consecutive 5xx/transport attempts on
@@ -80,6 +82,16 @@ class LLMError(RuntimeError):
 
     The message carries the provider's own error text so failures are
     diagnosable; it never contains key material.
+    """
+
+
+class LLMDeadlineExceeded(LLMError):
+    """The caller's task deadline expired mid-call — budget death,
+    not provider exhaustion, so callers can tell the two apart.
+
+    Raised at a decision point between attempts; an attempt already
+    in flight when the deadline hits dies as a transport error and
+    the next decision point converts it.
     """
 
 
@@ -296,11 +308,22 @@ class LLMClient:
         model: str,
         stop: Sequence[str] | None = None,
         max_tokens: int | None = None,
+        *,
+        deadline: float | None = None,
     ) -> LLMResponse:
         """One completion; rotation and fallback are internal.
 
         ``model`` is the canonical name; the provider-specific alias
         is chosen per endpoint and never surfaces in the response.
+
+        ``deadline`` is an absolute ``time.monotonic()`` timestamp
+        bounding the call: waits and each attempt's HTTP timeout are
+        capped to the time remaining, and no new attempt starts once
+        it has passed — the call raises ``LLMDeadlineExceeded``
+        instead of retrying past the budget. ``None`` keeps the
+        unbounded default. The caller (T18) computes the task
+        deadline once per task and passes the same timestamp to
+        every ``generate`` call.
         """
         chain = self._chain_for(model)
         if not chain:
@@ -313,8 +336,39 @@ class LLMClient:
             elapsed = self._clock() - (self._last_request_at or 0.0)
             wait = self._min_request_interval_s - elapsed
             if wait > 0.0:
+                if deadline is not None:
+                    remaining = deadline - self._clock()
+                    if remaining <= 0.0:
+                        raise LLMDeadlineExceeded(
+                            f"deadline exceeded for model '{model}' "
+                            f"during the pacing wait"
+                        )
+                    wait = min(wait, remaining)
                 self._sleep(wait)
-        return self._run_chain(chain, model, messages, stop, max_tokens)
+        return self._run_chain(
+            chain, model, messages, stop, max_tokens, deadline
+        )
+
+    def _capped_sleep(self, seconds: float, deadline: float | None) -> None:
+        """One wait: full when no deadline is set, else capped to the
+        time remaining (never negative — ``time.sleep`` would raise)."""
+        if deadline is None:
+            self._sleep(seconds)
+            return
+        remaining = deadline - self._clock()
+        self._sleep(max(0.0, min(seconds, remaining)))
+
+    def _attempt_timeout(self, deadline: float | None) -> httpx.Timeout:
+        """Per-attempt HTTP timeout: the standing config, or each
+        stage capped to the time left before ``deadline`` (a 110 s
+        read must not outlive a 120 s task budget)."""
+        if deadline is None:
+            return self.timeout
+        remaining = deadline - self._clock()
+        return httpx.Timeout(
+            min(_READ_TIMEOUT_S, remaining),
+            connect=min(_CONNECT_TIMEOUT_S, remaining),
+        )
 
     def _run_chain(
         self,
@@ -323,6 +377,7 @@ class LLMClient:
         messages: Sequence[Mapping[str, str]],
         stop: Sequence[str] | None,
         max_tokens: int | None,
+        deadline: float | None,
     ) -> LLMResponse:
         retries = 0
         backoff_stage = 0
@@ -336,6 +391,13 @@ class LLMClient:
             ring = provider.ring
             key: str | None = None
             while True:
+                # No new attempt once the budget is gone — with the
+                # last failure named so the caller can diagnose.
+                if deadline is not None and self._clock() >= deadline:
+                    raise LLMDeadlineExceeded(
+                        f"deadline exceeded for model '{model}' "
+                        f"(last failure: {last_failure})"
+                    )
                 if key is None:
                     key = ring.next_key()
                 if key is None:
@@ -344,7 +406,13 @@ class LLMClient:
                 attempted = True
                 try:
                     payload = self._post(
-                        provider, key, model, messages, stop, max_tokens
+                        provider,
+                        key,
+                        model,
+                        messages,
+                        stop,
+                        max_tokens,
+                        deadline,
                     )
                 except _HTTPError as exc:
                     retries += 1
@@ -374,7 +442,10 @@ class LLMClient:
                             key = None
                             backoff_stage = 0
                             continue
-                        self._sleep(self._backoff_s * 2 ** (backoff_stage - 1))
+                        self._capped_sleep(
+                            self._backoff_s * 2 ** (backoff_stage - 1),
+                            deadline,
+                        )
                         continue
                     if exc.status == 400 and (
                         exc.message == "Provider returned error"
@@ -393,7 +464,10 @@ class LLMClient:
                             key = None
                             backoff_stage = 0
                             continue
-                        self._sleep(self._backoff_s * 2 ** (backoff_stage - 1))
+                        self._capped_sleep(
+                            self._backoff_s * 2 ** (backoff_stage - 1),
+                            deadline,
+                        )
                         continue
                     raise LLMError(
                         f"provider '{provider.name}' rejected the "
@@ -409,7 +483,9 @@ class LLMClient:
                         key = None
                         backoff_stage = 0
                         continue
-                    self._sleep(self._backoff_s * 2 ** (backoff_stage - 1))
+                    self._capped_sleep(
+                        self._backoff_s * 2 ** (backoff_stage - 1), deadline
+                    )
                     continue
                 request_ms = (self._clock() - started) * 1000.0
                 return self._parse_response(
@@ -427,14 +503,28 @@ class LLMClient:
                 reset_used = True
                 backoff_stage = 0
                 ring.reset()
-                self._sleep(self._backoff_s)
+                self._capped_sleep(self._backoff_s, deadline)
                 key = ring.next_key()
                 if key is not None:
+                    # Same gate as the loop top: the capped wait (or
+                    # the exhausted window) may have spent the budget.
+                    if deadline is not None and self._clock() >= deadline:
+                        raise LLMDeadlineExceeded(
+                            f"deadline exceeded for model '{model}' "
+                            f"before the reset retry "
+                            f"(last failure: {last_failure})"
+                        )
                     started = self._clock()
                     attempted = True
                     try:
                         payload = self._post(
-                            provider, key, model, messages, stop, max_tokens
+                            provider,
+                            key,
+                            model,
+                            messages,
+                            stop,
+                            max_tokens,
+                            deadline,
                         )
                     except _HTTPError as exc:
                         retries += 1
@@ -493,6 +583,7 @@ class LLMClient:
         messages: Sequence[Mapping[str, str]],
         stop: Sequence[str] | None,
         max_tokens: int | None,
+        deadline: float | None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": provider.models[model],
@@ -509,7 +600,7 @@ class LLMClient:
                 endpoint,
                 json=body,
                 headers={"Authorization": f"Bearer {key}"},
-                timeout=self.timeout,
+                timeout=self._attempt_timeout(deadline),
             )
         finally:
             # Wall-clock pacing counts every completed exchange —
