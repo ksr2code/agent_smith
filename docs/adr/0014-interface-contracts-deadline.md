@@ -1,8 +1,8 @@
 # ADR-0014: Typed interface contracts and the task-deadline model
 
-- Status: Proposed (pending joint ratification via PR review)
+- Status: Accepted — ratified via PR #2 review (both members), merged 2026-11-16
 - Date: 2026-11-16
-- Deciders: A + B (pending joint ratification)
+- Deciders: A + B
 
 ## Context
 

@@ -38,8 +38,8 @@ under "Milestones and gates" — that section stays authoritative.)
 | T07 | Worker core + attribute policy | B | todo | — |
 | T08 | SandboxProcess (parent side) | B | todo | — |
 | T09 | Sandbox REPL CLI | B | todo | — |
-| T10 | SWE-bench tools, local mode | A | todo | — |
-| T11 | MBPP run_tests tool | A | todo | — |
+| T10 | SWE-bench tools, local mode | B | todo | — |
+| T11 | MBPP run_tests tool | B | todo | — |
 | T12 | MCP client manager + stubs | A | todo | needs T08 + one server |
 | T13 | Tool result formatting | A | todo | — |
 | T14 | Dynamic sandbox manual | A | todo | — |
