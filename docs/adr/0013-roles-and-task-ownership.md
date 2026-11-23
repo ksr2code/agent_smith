@@ -1,5 +1,5 @@
 # ADR-0013: Role assignments and task-ownership moves
-- Status: Proposed
+- Status: Accepted — ratified via PR #3 review comment (both members), 2026-11-23
 - Date: 2026-11-20
 - Deciders: ksmailov + wehan (agreed in chat, 2026-11-20)
 
