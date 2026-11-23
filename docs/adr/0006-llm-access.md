@@ -1,7 +1,7 @@
 # ADR-0006: LLM access via one OpenAI-compatible client
-- Status: Proposed
+- Status: Accepted — ratified via PR #4 review comment (both members), 2026-11-23
 - Date: 2026-11-20
-- Deciders: A + B (pre-aligned in PROJECT_PLAN §2, committed 95c6169) (pending joint ratification)
+- Deciders: A + B (pre-aligned in PROJECT_PLAN §2, committed 95c6169)
 
 ## Context
 
