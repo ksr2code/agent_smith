@@ -1,0 +1,78 @@
+{
+  "models": [
+    {
+      "canonical": "gpt-oss-120b",
+      "providers": {
+        "groq": "openai/gpt-oss-120b"
+      }
+    },
+    {
+      "canonical": "nemotron-3.5-lightning",
+      "providers": {
+        "openrouter": "nvidia/nemotron-3.5-lightning:free",
+        "nvidia": "nvidia/nemotron-3.5-lightning-30b-a3b"
+      }
+    },
+    {
+      "canonical": "qwen3.8-27b",
+      "providers": {
+        "groq": "qwen/qwen3.8-27b"
+      }
+    },
+    {
+      "canonical": "gemini-3.5-flash-lite",
+      "providers": {
+        "google": "gemini-3.5-flash-lite"
+      }
+    },
+    {
+      "canonical": "gemini-3.5-flash",
+      "providers": {
+        "google": "gemini-3.5-flash"
+      }
+    },
+    {
+      "canonical": "gemma-4-31b-it",
+      "providers": {
+        "nvidia": "google/gemma-4-31b-it",
+        "openrouter": "google/gemma-4-31b-it:free"
+      }
+    }
+  ],
+  "providers": [
+    {
+      "name": "openrouter",
+      "api_url": "https://openrouter.ai/api/v1",
+      "keys_env": ["OPENROUTER_API_KEY", "OPENROUTER_API_KEY_2"]
+    },
+    {
+      "name": "groq",
+      "api_url": "https://api.groq.com/openai/v1",
+      "keys_env": ["GROQ_API_KEY", "GROQ_API_KEY_2"]
+    },
+    {
+      "name": "google",
+      "api_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "keys_env": ["GOOGLE_API_KEY", "GOOGLE_API_KEY_2"]
+    },
+    {
+      "name": "nvidia",
+      "api_url": "https://integrate.api.nvidia.com/v1",
+      "keys_env": ["NVIDIA_API_KEY"]
+    }
+  ],
+  "limits": {
+    "mbpp": {
+      "max_iterations": 10,
+      "max_input_tokens": 6000,
+      "max_output_tokens": 1500,
+      "max_time_seconds": 120.0
+    },
+    "swebench": {
+      "max_iterations": 30,
+      "max_input_tokens": 300000,
+      "max_output_tokens": 10000,
+      "max_time_seconds": 900.0
+    }
+  }
+}
