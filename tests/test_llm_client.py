@@ -763,6 +763,9 @@ def test_partial_usage_present_values_stay_verbatim(
     assert resp.output_tokens == 12
     assert "estimated_fields" not in resp.usage_raw
     assert resp.usage_raw == {"prompt_tokens": 0, "completion_tokens": "12"}
+    # A reported 0 with visible text still fires the divergence note —
+    # genuine under-reporting stays catchable.
+    assert sanity_check_usage(resp.text, resp) is not None
 
 
 def test_partial_usage_explicit_none_counts_are_missing(
@@ -788,6 +791,35 @@ def test_partial_usage_explicit_none_counts_are_missing(
         "completion_tokens": None,
         "estimated_fields": ["prompt_tokens", "completion_tokens"],
     }
+
+
+@pytest.mark.parametrize(
+    ("bad_field", "bad_value"),
+    [("prompt_tokens", "abc"), ("completion_tokens", "")],
+)
+def test_garbage_usage_count_raises_llm_error(
+    bad_field: str,
+    bad_value: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: an unparseable count value escaping int() as a
+    # raw ValueError (and, before the estimate refactor, silently
+    # zeroing as falsy garbage) — garbage counts must be a
+    # diagnosable LLMError naming the provider and the field.
+    usage = {"prompt_tokens": 7, "completion_tokens": 9}
+    usage[bad_field] = bad_value
+    scripted = _Scripted()
+    scripted.add(200, _reply(usage=usage))
+    client = _client(
+        scripted,
+        _models_ab(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+    )
+    with pytest.raises(LLMError, match=f"unparseable {bad_field}") as exc:
+        client.generate(_MESSAGES, "zephyr")
+    assert "prov_a" in str(exc.value)  # provider named
+    assert len(scripted.auths) == 1  # parse failures never retry
 
 
 def test_pacing_between_generate_calls(
@@ -1015,9 +1047,29 @@ def test_attempt_timeout_helper_math(
     tight = client._attempt_timeout(clock.now + 5.0)
     assert tight.read == 5.0
     assert tight.connect == 5.0
-    spent = client._attempt_timeout(clock.now)
-    assert spent.read == 0.0
-    assert spent.connect == 0.0
+    # Boundary: a remainder of exactly zero is already too late.
+    with pytest.raises(LLMDeadlineExceeded):
+        client._attempt_timeout(clock.now)
+
+
+def test_attempt_timeout_past_deadline_raises_immediately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: the timeout helper building a zero/negative
+    # httpx.Timeout when the budget ran out inside the pre-gate →
+    # HTTP-call window — it must raise LLMDeadlineExceeded there
+    # (inside _post's try, so pacing still records the exchange).
+    scripted = _Scripted()
+    clock = _FakeClock()
+    client = _client(
+        scripted,
+        _models_ab(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+        clock=clock,
+    )
+    with pytest.raises(LLMDeadlineExceeded):
+        client._attempt_timeout(clock.now - 0.5)
 
 
 def test_model_entry_order_sets_primary_and_backup(

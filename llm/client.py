@@ -169,6 +169,19 @@ def _provider_error_message(response: httpx.Response) -> str:
     return response.text[:200]
 
 
+def _as_int(value: Any, field: str, provider_name: str) -> int:
+    """Coerce one reported usage count; garbage is a diagnosable
+    protocol error, never a silent zero and never a raw ValueError
+    escaping into caller code."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise LLMError(
+            f"provider '{provider_name}' sent an unparseable "
+            f"{field}: {repr(value)[:40]}"
+        ) from None
+
+
 class LLMClient:
     """Rotation + fallback front end over one HTTP transport.
 
@@ -361,10 +374,16 @@ class LLMClient:
     def _attempt_timeout(self, deadline: float | None) -> httpx.Timeout:
         """Per-attempt HTTP timeout: the standing config, or each
         stage capped to the time left before ``deadline`` (a 110 s
-        read must not outlive a 120 s task budget)."""
+        read must not outlive a 120 s task budget). A remainder that
+        slipped non-positive past the pre-attempt gates is a deadline
+        failure, not a zero-second request."""
         if deadline is None:
             return self.timeout
         remaining = deadline - self._clock()
+        if remaining <= 0.0:
+            raise LLMDeadlineExceeded(
+                f"deadline exceeded ({abs(remaining):.3f} s past)"
+            )
         return httpx.Timeout(
             min(_READ_TIMEOUT_S, remaining),
             connect=min(_CONNECT_TIMEOUT_S, remaining),
@@ -659,12 +678,14 @@ class LLMClient:
                 estimated.append("prompt_tokens")
                 input_tokens = len(json.dumps(messages)) // 4
             else:
-                input_tokens = int(prompt)
+                input_tokens = _as_int(prompt, "prompt_tokens", provider.name)
             if completion is None:
                 estimated.append("completion_tokens")
                 output_tokens = len(text) // 4
             else:
-                output_tokens = int(completion)
+                output_tokens = _as_int(
+                    completion, "completion_tokens", provider.name
+                )
             if estimated:
                 usage_raw["estimated_fields"] = estimated
         else:

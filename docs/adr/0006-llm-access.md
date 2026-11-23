@@ -69,7 +69,9 @@ model, and always reports `model_name` as the canonical name.
   block itself is non-empty is estimated at chars/4 and listed in
   `usage_raw["estimated_fields"]`; a present count — including a
   literal 0 — is reported verbatim, so genuine under-reporting
-  stays visible to `sanity_check_usage`.
+  stays visible to `sanity_check_usage`. An unparseable count
+  value raises `LLMError` naming the provider and the field,
+  matching the malformed-response handling.
 
 - Deadline contract: `generate(..., deadline=...)` takes an
   absolute `time.monotonic()` timestamp (the caller computes the
