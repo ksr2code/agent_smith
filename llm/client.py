@@ -34,6 +34,16 @@ that model's ``providers`` object: the first is primary, the rest
 are fallbacks — a provider's position in the top-level
 ``providers`` list does not set per-model precedence.
 
+Usage accounting is honest: counts come from the provider's
+top-level ``prompt_tokens``/``completion_tokens`` verbatim (detail
+fields are subsets and are never added on top). When the whole
+usage block is absent, both counts are estimated at chars/4 and
+flagged ``estimated``; when individual counts are missing (absent
+or ``None``), only those are estimated and listed in
+``usage_raw["estimated_fields"]`` — a present count (even a
+literal 0) is reported unchanged, so genuine under-reporting stays
+visible to ``sanity_check_usage``.
+
 Key values are resolved from the environment at construction; a
 ``.env`` file in the working directory is parsed with the standard
 library only (``KEY=VALUE`` lines, ``#`` comments, quotes stripped)
@@ -89,7 +99,11 @@ class LLMResponse:
     ``model_name`` is always the CANONICAL name from the caller, even
     when the answer came from a fallback provider; ``api_url`` records
     the endpoint actually used. ``usage_raw`` is the provider's usage
-    block verbatim, or the estimate marker when none was reported.
+    block verbatim; when the whole block is absent it carries the
+    estimate marker, and when individual counts are missing (absent
+    or ``None``) it gains ``estimated_fields`` listing which counts
+    were estimated at chars/4 — present counts (even a literal 0)
+    stay verbatim.
     """
 
     text: str
@@ -542,9 +556,26 @@ class LLMClient:
         if isinstance(usage, dict) and usage:
             # Top-level counts only: detail fields (reasoning, cache)
             # are subsets of these and must never be added on top.
-            input_tokens = int(usage.get("prompt_tokens") or 0)
-            output_tokens = int(usage.get("completion_tokens") or 0)
+            # A MISSING count (key absent or None) is estimated at
+            # chars/4 and named in estimated_fields; a PRESENT count
+            # — including a literal 0 — is kept verbatim, so genuine
+            # under-reporting stays visible to sanity_check_usage.
             usage_raw: dict[str, Any] = dict(usage)
+            estimated: list[str] = []
+            prompt = usage.get("prompt_tokens")
+            completion = usage.get("completion_tokens")
+            if prompt is None:
+                estimated.append("prompt_tokens")
+                input_tokens = len(json.dumps(messages)) // 4
+            else:
+                input_tokens = int(prompt)
+            if completion is None:
+                estimated.append("completion_tokens")
+                output_tokens = len(text) // 4
+            else:
+                output_tokens = int(completion)
+            if estimated:
+                usage_raw["estimated_fields"] = estimated
         else:
             request_chars = len(json.dumps(messages))
             input_tokens = request_chars // 4

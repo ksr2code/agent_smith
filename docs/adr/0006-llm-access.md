@@ -65,6 +65,12 @@ model, and always reports `model_name` as the canonical name.
   (401/402/403) retire the key permanently; no reset ever reopens
   it.
 
+- Partial usage: a count that is absent (or `None`) while the
+  block itself is non-empty is estimated at chars/4 and listed in
+  `usage_raw["estimated_fields"]`; a present count — including a
+  literal 0 — is reported verbatim, so genuine under-reporting
+  stays visible to `sanity_check_usage`.
+
 - Pacing is wall-clock-aware: the client records when each request
   completed and at call entry sleeps only the remainder of the
   interval — a call long after the previous one sleeps nothing.

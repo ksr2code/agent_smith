@@ -668,6 +668,127 @@ def test_missing_usage_is_estimated_and_marked(
     assert resp.usage_raw["estimated"] is True
 
 
+def test_empty_usage_dict_takes_whole_estimate_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: an empty usage dict slipping into the partial
+    # path — no counts exist to keep, so it must behave exactly like
+    # an absent block (full estimate + the `estimated` marker).
+    scripted = _Scripted()
+    scripted.add(200, _reply(content="abcdefgh", usage={}))
+    client = _client(
+        scripted,
+        _models_ab(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+    )
+    resp = client.generate(_MESSAGES, "zephyr")
+    assert resp.input_tokens == len(json.dumps(_MESSAGES)) // 4
+    assert resp.output_tokens == len("abcdefgh") // 4
+    assert resp.usage_raw == {
+        "estimated": True,
+        "input_chars": len(json.dumps(_MESSAGES)),
+        "output_chars": 8,
+    }
+
+
+def test_partial_usage_missing_prompt_tokens_is_estimated_and_flagged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: a usage block present but missing prompt_tokens
+    # silently yielding a 0 input count — the missing count must be
+    # estimated at chars/4 and named in estimated_fields, while the
+    # present completion count stays verbatim.
+    usage = {"completion_tokens": 50}
+    scripted = _Scripted()
+    scripted.add(200, _reply(content="abcdefgh", usage=usage))
+    client = _client(
+        scripted,
+        _models_ab(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+    )
+    resp = client.generate(_MESSAGES, "zephyr")
+    assert resp.input_tokens == len(json.dumps(_MESSAGES)) // 4
+    assert resp.output_tokens == 50
+    assert resp.usage_raw == {
+        "completion_tokens": 50,
+        "estimated_fields": ["prompt_tokens"],
+    }
+
+
+def test_partial_usage_missing_completion_tokens_is_estimated_and_flagged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: the mirror case — missing completion_tokens
+    # estimated from the visible text while the prompt count stays
+    # verbatim.
+    usage = {"prompt_tokens": 100}
+    scripted = _Scripted()
+    scripted.add(200, _reply(content="abcdefgh", usage=usage))
+    client = _client(
+        scripted,
+        _models_ab(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+    )
+    resp = client.generate(_MESSAGES, "zephyr")
+    assert resp.input_tokens == 100
+    assert resp.output_tokens == len("abcdefgh") // 4
+    assert resp.usage_raw == {
+        "prompt_tokens": 100,
+        "estimated_fields": ["completion_tokens"],
+    }
+
+
+def test_partial_usage_present_values_stay_verbatim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: estimating over a PRESENT count — a literal 0
+    # with visible text is genuine under-reporting that the sanity
+    # check must keep catching, so present values (even a numeric
+    # string) are int()'d and reported unchanged, with no flag.
+    usage = {"prompt_tokens": 0, "completion_tokens": "12"}
+    scripted = _Scripted()
+    scripted.add(200, _reply(content="abcdefgh", usage=usage))
+    client = _client(
+        scripted,
+        _models_ab(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+    )
+    resp = client.generate(_MESSAGES, "zephyr")
+    assert resp.input_tokens == 0
+    assert resp.output_tokens == 12
+    assert "estimated_fields" not in resp.usage_raw
+    assert resp.usage_raw == {"prompt_tokens": 0, "completion_tokens": "12"}
+
+
+def test_partial_usage_explicit_none_counts_are_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Discriminates: treating an explicit null count as present —
+    # some providers report null; None is MISSING, so both counts
+    # get estimated and flagged in order.
+    usage = {"prompt_tokens": None, "completion_tokens": None}
+    scripted = _Scripted()
+    scripted.add(200, _reply(content="abcdefgh", usage=usage))
+    client = _client(
+        scripted,
+        _models_ab(),
+        monkeypatch,
+        {"T15_KEY_A1": "sk-a1", "T15_KEY_A2": "sk-a2"},
+    )
+    resp = client.generate(_MESSAGES, "zephyr")
+    assert resp.input_tokens == len(json.dumps(_MESSAGES)) // 4
+    assert resp.output_tokens == len("abcdefgh") // 4
+    assert resp.usage_raw == {
+        "prompt_tokens": None,
+        "completion_tokens": None,
+        "estimated_fields": ["prompt_tokens", "completion_tokens"],
+    }
+
+
 def test_pacing_between_generate_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
